@@ -1,0 +1,7 @@
+mutators:
+ - cxx_all
+excludePaths: # support regex
+ - gtest
+ - gmock
+timeout: 10000 # 10 seconds
+quiet: false # enables additional logging
