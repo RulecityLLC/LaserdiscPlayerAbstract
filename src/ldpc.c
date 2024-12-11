@@ -632,6 +632,13 @@ uint32_t ldpc_get_current_abs_field()
 	return uRes;
 }
 
+void ldpc_set_current_abs_field(unsigned int uField)
+{
+	g_ldpc_state.status = LDPC_PAUSED;	// only VLDP-HW uses this and it needs valid results from ldpc_get_current_abs_field
+	g_ldpc_state.uCurrentField = uField;
+	VBIC_SetField(g_ldpc_state.uCurrentField);
+}
+
 uint32_t ldpc_get_current_field_vbi_line18()
 {
 	return VBIC_GetCurFieldLine18();
