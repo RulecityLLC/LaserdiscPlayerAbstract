@@ -234,7 +234,7 @@ VBIC_SeekResult VBIC_SeekInternal(uint32_t uFrameNum, uint32_t *pPeekOnly)
 	pEntry = &g_VBIC_state.pVBI->pEntries[i];
 
 	// ignore "zeroes" patterns as they cannot contain picture numbers and may mess up our results
-	while ((pEntry->typePattern == PATTERN_ZEROES) || (pEntry->typePattern == PATTERN_NOCHANGE))
+	while (pEntry->typePattern == PATTERN_ZEROES)
 	{
 		// if we can still go backward to a non-zero pattern
 		if (i > 0)
@@ -423,7 +423,6 @@ void VBIC_LoadLine18(const VBICompactEntry_t *pEntry, int32_t iFieldOffsetFromEn
 			// this number will end up being >=0 as long as our offset is correct even if i32BasePictureNumber is negative
 			uint32_t u32PicNum = (i32BasePictureNumber + (u32FieldDiff >> 1));
 			g_VBIC_state.u32CurPictureNum = u32PicNum;
-			g_VBIC_state.u32CurPictureNum = u32PicNum;
 			VBIC_2BCD(u32PicNum);
 			g_VBIC_state.pu8CurLine18[0] |= 0xF8;
 		}
@@ -449,7 +448,6 @@ void VBIC_LoadLine18(const VBICompactEntry_t *pEntry, int32_t iFieldOffsetFromEn
 	case PATTERN_22_ATARI:
 		{
 			uint32_t u32PicNum = (i32BasePictureNumber + (u32FieldDiff >> 1));
-			g_VBIC_state.u32CurPictureNum = u32PicNum;
 			g_VBIC_state.u32CurPictureNum = u32PicNum;
 			VBIC_2BCD(u32PicNum);
 
@@ -642,4 +640,3 @@ VBIC_BOOL VBIC_FromBuffer(VBICompact_t *pDstEntries, size_t stMaxEntries, const 
 
 	return res;
 }
-

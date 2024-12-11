@@ -219,6 +219,7 @@ uint32_t ldpc_get_cur_frame_num();
 uint32_t ldpc_get_current_track();
 uint32_t ldpc_get_current_field();
 uint32_t ldpc_get_current_abs_field();
+void ldpc_set_current_abs_field(unsigned int uField);
 uint32_t ldpc_get_current_field_vbi_line18();	// get the VBI data from line 18 (this is to determine whether current field is the beginning of a frame)
 
 LDPCStatus_t ldpc_get_status();
