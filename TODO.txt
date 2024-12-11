@@ -1,0 +1,4 @@
+11 Dec 2024:
+I discovered that VBICompact.c was not identical for Daphne and Dexter.  Daphne appeared to have a more recent bug fix, but I didn't want to break Dexter customers, so I overwrote the Daphne fix with the Dexter version to be safe.
+
+To research this fix (and re-add it, along with a unit test), see Daphne SVN commit from 21 Aug 2014.
