@@ -1156,6 +1156,201 @@ TEST_CASE(vbi_compactor23)
 	test_vbi_compactor23();
 }
 
+void test_vbi_compactor23_offset1()
+{
+	VBIParseSPtr VBISPtr = VBIParse::GetInstance();
+	VBIParse *pVBI = VBISPtr.get();
+	VBI_t vbi;
+	bool bRes = false;
+
+	vbi = VBIParse::GenerateVBILeadIn();
+	pVBI->AddVBIData(vbi);
+	vbi = VBIParse::GenerateVBIEmpty();
+	pVBI->AddVBIData(vbi);
+	vbi = VBIParse::GenerateVBIFrame(1, NTSC);
+	pVBI->AddVBIData(vbi);
+	vbi = VBIParse::GenerateVBIEmpty();
+	pVBI->AddVBIData(vbi);
+	vbi = VBIParse::GenerateVBIEmpty();
+	pVBI->AddVBIData(vbi);
+	vbi = VBIParse::GenerateVBIFrame(2, NTSC);
+	pVBI->AddVBIData(vbi);
+	vbi = VBIParse::GenerateVBIEmpty();
+	pVBI->AddVBIData(vbi);
+	vbi = VBIParse::GenerateVBIFrame(3, NTSC);
+	pVBI->AddVBIData(vbi);
+	vbi = VBIParse::GenerateVBIEmpty();
+	pVBI->AddVBIData(vbi);
+	vbi = VBIParse::GenerateVBIEmpty();
+	pVBI->AddVBIData(vbi);
+
+	list<VBICompactEntry_t> lstEntries;
+	bRes = pVBI->CompactVBIData(lstEntries, NTSC);
+	TEST_REQUIRE(bRes);
+
+	TEST_CHECK_EQUAL(2, lstEntries.size());
+
+	VBICompactEntry_t entry = lstEntries.front();
+	lstEntries.pop_front();
+	TEST_CHECK_EQUAL(0, entry.i32StartPictureNumber);
+	TEST_CHECK_EQUAL(PATTERN_LEADIN, entry.typePattern);
+	TEST_CHECK_EQUAL(0, entry.u32StartAbsField);
+	TEST_CHECK_EQUAL(entry.u8PatternOffset, 0);
+
+	entry = lstEntries.front();
+	lstEntries.pop_front();
+	TEST_CHECK_EQUAL(0, entry.i32StartPictureNumber);
+	TEST_CHECK_EQUAL(PATTERN_23, entry.typePattern);
+	TEST_CHECK_EQUAL(1, entry.u32StartAbsField);
+	TEST_CHECK_EQUAL(entry.u8PatternOffset, 1);
+}
+
+TEST_CASE(vbi_compactor23_offset1)
+{
+	test_vbi_compactor23_offset1();
+}
+
+void test_vbi_compactor23_offset2()
+{
+	VBIParseSPtr VBISPtr = VBIParse::GetInstance();
+	VBIParse *pVBI = VBISPtr.get();
+	VBI_t vbi;
+	bool bRes = false;
+
+	vbi = VBIParse::GenerateVBILeadIn();
+	pVBI->AddVBIData(vbi);
+	vbi = VBIParse::GenerateVBIFrame(1, NTSC);
+	pVBI->AddVBIData(vbi);
+	vbi = VBIParse::GenerateVBIEmpty();
+	pVBI->AddVBIData(vbi);
+	vbi = VBIParse::GenerateVBIEmpty();
+	pVBI->AddVBIData(vbi);
+	vbi = VBIParse::GenerateVBIFrame(2, NTSC);
+	pVBI->AddVBIData(vbi);
+	vbi = VBIParse::GenerateVBIEmpty();
+	pVBI->AddVBIData(vbi);
+	vbi = VBIParse::GenerateVBIFrame(3, NTSC);
+	pVBI->AddVBIData(vbi);
+	vbi = VBIParse::GenerateVBIEmpty();
+	pVBI->AddVBIData(vbi);
+	vbi = VBIParse::GenerateVBIEmpty();
+	pVBI->AddVBIData(vbi);
+
+	list<VBICompactEntry_t> lstEntries;
+	bRes = pVBI->CompactVBIData(lstEntries, NTSC);
+	TEST_REQUIRE(bRes);
+
+	TEST_CHECK_EQUAL(2, lstEntries.size());
+
+	VBICompactEntry_t entry = lstEntries.front();
+	lstEntries.pop_front();
+	TEST_CHECK_EQUAL(0, entry.i32StartPictureNumber);
+	TEST_CHECK_EQUAL(PATTERN_LEADIN, entry.typePattern);
+	TEST_CHECK_EQUAL(0, entry.u32StartAbsField);
+	TEST_CHECK_EQUAL(entry.u8PatternOffset, 0);
+
+	entry = lstEntries.front();
+	lstEntries.pop_front();
+	TEST_CHECK_EQUAL(0, entry.i32StartPictureNumber);
+	TEST_CHECK_EQUAL(PATTERN_23, entry.typePattern);
+	TEST_CHECK_EQUAL(1, entry.u32StartAbsField);
+	TEST_CHECK_EQUAL(entry.u8PatternOffset, 2);
+}
+
+TEST_CASE(vbi_compactor23_offset2)
+{
+	test_vbi_compactor23_offset2();
+}
+
+void test_vbi_compactor23_offset3()
+{
+	VBIParseSPtr VBISPtr = VBIParse::GetInstance();
+	VBIParse *pVBI = VBISPtr.get();
+	VBI_t vbi;
+	bool bRes = false;
+
+	vbi = VBIParse::GenerateVBILeadIn();
+	pVBI->AddVBIData(vbi);
+	vbi = VBIParse::GenerateVBIEmpty();
+	pVBI->AddVBIData(vbi);
+	vbi = VBIParse::GenerateVBIEmpty();
+	pVBI->AddVBIData(vbi);
+	vbi = VBIParse::GenerateVBIFrame(2, NTSC);
+	pVBI->AddVBIData(vbi);
+	vbi = VBIParse::GenerateVBIEmpty();
+	pVBI->AddVBIData(vbi);
+	vbi = VBIParse::GenerateVBIFrame(3, NTSC);
+	pVBI->AddVBIData(vbi);
+	vbi = VBIParse::GenerateVBIEmpty();
+	pVBI->AddVBIData(vbi);
+	vbi = VBIParse::GenerateVBIEmpty();
+	pVBI->AddVBIData(vbi);
+
+	list<VBICompactEntry_t> lstEntries;
+	bRes = pVBI->CompactVBIData(lstEntries, NTSC);
+	TEST_REQUIRE(bRes);
+
+	TEST_CHECK_EQUAL(2, lstEntries.size());
+
+	VBICompactEntry_t entry = lstEntries.front();
+	lstEntries.pop_front();
+	TEST_CHECK_EQUAL(0, entry.i32StartPictureNumber);
+	TEST_CHECK_EQUAL(PATTERN_LEADIN, entry.typePattern);
+	TEST_CHECK_EQUAL(0, entry.u32StartAbsField);
+	TEST_CHECK_EQUAL(entry.u8PatternOffset, 0);
+
+	entry = lstEntries.front();
+	lstEntries.pop_front();
+	TEST_CHECK_EQUAL(0, entry.i32StartPictureNumber);
+	TEST_CHECK_EQUAL(PATTERN_23, entry.typePattern);
+	TEST_CHECK_EQUAL(1, entry.u32StartAbsField);
+	TEST_CHECK_EQUAL(entry.u8PatternOffset, 3);
+}
+
+TEST_CASE(vbi_compactor23_offset3)
+{
+	test_vbi_compactor23_offset3();
+}
+
+void test_vbi_compactor23_offset4()
+{
+	VBIParseSPtr VBISPtr = VBIParse::GetInstance();
+	VBIParse *pVBI = VBISPtr.get();
+	VBI_t vbi;
+	bool bRes = false;
+
+	vbi = VBIParse::GenerateVBIEmpty();
+	pVBI->AddVBIData(vbi);
+	vbi = VBIParse::GenerateVBIFrame(2, NTSC);
+	pVBI->AddVBIData(vbi);
+	vbi = VBIParse::GenerateVBIEmpty();
+	pVBI->AddVBIData(vbi);
+	vbi = VBIParse::GenerateVBIFrame(3, NTSC);
+	pVBI->AddVBIData(vbi);
+	vbi = VBIParse::GenerateVBIEmpty();
+	pVBI->AddVBIData(vbi);
+	vbi = VBIParse::GenerateVBIEmpty();
+	pVBI->AddVBIData(vbi);
+
+	list<VBICompactEntry_t> lstEntries;
+	bRes = pVBI->CompactVBIData(lstEntries, NTSC);
+	TEST_REQUIRE(bRes);
+
+	TEST_REQUIRE_EQUAL(1, lstEntries.size());
+
+	VBICompactEntry_t entry = lstEntries.front();
+	lstEntries.pop_front();
+	TEST_CHECK_EQUAL(0, entry.i32StartPictureNumber);
+	TEST_CHECK_EQUAL(PATTERN_23, entry.typePattern);
+	TEST_CHECK_EQUAL(0, entry.u32StartAbsField);
+	TEST_CHECK_EQUAL(entry.u8PatternOffset, 4);
+}
+
+TEST_CASE(vbi_compactor23_offset4)
+{
+	test_vbi_compactor23_offset4();
+}
+
 void test_vbi_compactor22_atari()
 {
 	VBIParseSPtr VBISPtr = VBIParse::GetInstance();

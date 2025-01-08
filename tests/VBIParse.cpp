@@ -277,7 +277,7 @@ bool VBIParse::GetHighLowWidths(list <unsigned int> &lstTransWidths,
 }
 
 bool VBIParse::GetHighLowWidths(list <unsigned int> &lstTransWidths,
-	double dHighThreshold, double dLowThreshold,
+	double dHighThreshold, double dLowThreshold,								
 	const unsigned char *p8Line, unsigned int uLineWidth)
 {
 	bool bRes = true;
@@ -427,7 +427,7 @@ bool VBIParse::GetBestLine1718(unsigned int &uLine1718, unsigned int uLine17, un
 	unsigned int uPreviousPictureNumVBI)
 {
 	bool bRes = false;
-
+	
 	uLine1718 = PARSE_FAILED;	// make sure it returns 'undefined' if we don't define something
 
 	// If they're already the same AND they are both known quantities, we're done
@@ -560,7 +560,7 @@ unsigned int VBIParse::DecimalToPictureNumVBI(unsigned int uNum, VideoStandard_t
 {
 	// convert frame number to BCD
 	string strFrame = std::to_string(uNum);
-
+	
 	// convert back to uint, assuming source was hex
 	unsigned int uResult = std::stoi(strFrame, nullptr, 16);
 
@@ -582,7 +582,7 @@ unsigned int VBIParse::DecimalToChapterNumVBI(unsigned int uNum)
 {
 	// convert frame number to BCD
 	string strFrame = std::to_string(uNum);
-
+	
 	// convert back to uint, assuming source was hex
 	unsigned int uResult = std::stoi(strFrame, nullptr, 16);
 	uResult = 0x880DDD | (uResult << 12);
@@ -732,7 +732,7 @@ string VBIParse::SaveVBIData()
 
 		// do white flag
 		*(pBuf++) = (unsigned char) vbi.bWhiteFlag;	// I hope this goes to 0 or 1 hehe
-
+		
 		// lines 16-18
 		for (unsigned int uIdx = 0; uIdx < 3; uIdx++)
 		{
@@ -771,7 +771,7 @@ bool VBIParse::LoadVBIData(const void *pBuf, size_t stSizeBytes)
 	{
 		size_t stByteCount = 0;
 		VBI_t vbi;
-
+		
 		while (stByteCount < stSizeBytes)
 		{
 			// grab white flag
@@ -900,7 +900,7 @@ bool VBIParse::VerifyVBIData(vector <VBI_t> &vParseVBI, list<string> &lstWarning
 			// if we didn't end up fixing the error, then log it
 			else
 			{
-				// If we couldn't discern correct
+				// If we couldn't discern correct 
 				s = "Conflict found which could not be automatically resolved.  On track ";
 				s += std::to_string(uTrackIdx) + ", field " + std::to_string(uWhichField) + " (";
 				s += UintHexToStr((uFieldIdx*10) + 4) + "), Line 17 is ";
@@ -1015,7 +1015,7 @@ bool VBIParse::AutoFixField(vector <VBI_t> &vParseVBI, size_t uFieldIdx, double 
 		{
 			VBICompactEntry_t entry = lstEntries.back();
 			int iFieldOffset = 9 - entry.u32StartAbsField;	// the field we are concerned with
-			VBIC_LoadLine18(&entry, iFieldOffset);	// get the expected value
+			VBIC_LoadLine18(&entry, iFieldOffset);	// get the expected value 
 			unsigned int uThisLine18 = VBIC_GetCurFieldLine18();
 
 			// if there are two more fields after this one, compare with it just to double-check our result
@@ -1206,6 +1206,80 @@ bool VBIParse::CompactVBIData(list<VBICompactEntry_t> &lstEntries, const vector 
 			{
 				entry.i32StartPictureNumber = iLastPictureNum = PictureNumVBIToDecimal(uLine18, vidStd);
 				entry.typePattern = PATTERN_23;
+
+				// check to see if the pattern actually started 1 or more fields before
+				if (stFieldIdx > 0)
+				{
+					// 8-bits to optimize for AVR
+					uint8_t u8StartPictureNumberAdjustment = 0;
+					uint8_t u8StartAbsFieldAdjustment = 0;
+					uint8_t u8NewPatternOffset = 0;
+
+					// the pattern could've started between 1-4 fields preceeding our current position
+					for (size_t iFieldsWherePatternIsValid = 1; iFieldsWherePatternIsValid < 5; iFieldsWherePatternIsValid++)
+					{
+						// if we can look back on our VBI array without overflowing (ie array index becoming -1)
+						if (stFieldIdx >= iFieldsWherePatternIsValid)
+						{
+							bool bPatternIsValidOnCandidateField = false;
+							unsigned int uLastLine18 = vParseVBI[stFieldIdx-iFieldsWherePatternIsValid].uVBI[LINE18];
+
+							switch (iFieldsWherePatternIsValid)
+							{
+							default:	// 1, 2, or 4 fields before
+								if (uLastLine18 == PARSE_BLACK)
+								{
+									u8NewPatternOffset = 5 - iFieldsWherePatternIsValid;
+									bPatternIsValidOnCandidateField = true;
+								}
+								break;
+							case 3:	// 3 fields before (we would've already checked 1 and 2 fields before successfully)
+								if (uLastLine18 == DecimalToPictureNumVBI(entry.i32StartPictureNumber-1, vidStd))
+								{
+									u8NewPatternOffset = 2;
+									bPatternIsValidOnCandidateField = true;
+								}
+								break;
+							}
+
+							// if we found that the pattern is field on the candidate field, then we may be able to get rid of previous entries and save space
+							if (bPatternIsValidOnCandidateField)
+							{
+								// the beginning of the 2:3 pattern will always be 2 picture numbers less because 2:3 encompasses 2 picture numbers and we're subtracting from the next complete pattern's start picture number
+								u8StartPictureNumberAdjustment = 2;
+
+								// u32StartAbsField needs to refer to the start of the current pattern, even if it starts in the middle of the pattern
+								u8StartAbsFieldAdjustment = iFieldsWherePatternIsValid;
+
+								// if the previous entry also covers the same area they our adjustment will cover, then we need to get rid of it now because we have a more accurate entry
+								if (!lstEntries.empty())
+								{
+									VBICompactEntry_t entryPrev = lstEntries.back();
+									if (entryPrev.u32StartAbsField == (entry.u32StartAbsField - iFieldsWherePatternIsValid))
+									{
+										lstEntries.pop_back();	// get rid of it, our new entry supercedes it
+									}
+								}
+							}
+							// if we did not find a matching candidate, then our journey is finished
+							else
+							{
+								break;
+							}
+						}
+						// else there are no more fields to examine, so we're done
+						else
+						{
+							break;
+						}
+					} // end for loop
+
+					// even if we found that the pattern did not extend into the past, the default values will cause no change to happen
+					entry.i32StartPictureNumber -= u8StartPictureNumberAdjustment;
+					entry.u32StartAbsField -= u8StartAbsFieldAdjustment;
+					entry.u8PatternOffset = u8NewPatternOffset;
+				}
+
 			}
 			// else check to see if it's 2:2
 			else if ((stFieldsRemaining >= 2) && IsPictureNum(uLine18) &&

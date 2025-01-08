@@ -62,11 +62,15 @@ typedef enum
 
 typedef struct VBICompactEntry_s
 {
-	// Field index where the new pattern begins
+	// Field index where the new pattern begins, including if it's incomplete with an offset.
+	// It does not refer to where the pattern would begin if it were complete (ie this number can never be negative).
+	// For example, if this value is 0, and if pattern type is 2:3 and the offset is 4, then field 0
+	//   would be the final field of a 2:3 pattern and the next field would be the beginning of a new complete 2:3 pattern.
 	// (this must be a long because on AVR-GCC, int is 16-bits and this number can go up to 120,000 conceivably)
 	uint32_t u32StartAbsField;
 
-	// The picture number that correspond to the start of the pattern.
+	// The picture number that correspond to the start of the pattern if it were complete.
+	// For example, if the offset is not 0, the start picture number refers to the picture number if the offset were 0.
 	// (this must be a long because on AVR-GCC, int is 16-bits)
 	// (this must be signed because on 2:3 patterns, the start picture number may be negative)
 	int32_t i32StartPictureNumber;
@@ -82,7 +86,7 @@ typedef struct VBICompactEntry_s
 	uint16_t u16Special;
 
 	// Offset from the start of the pattern (as defined in the comments for the enum's above)
-	// 0 means no offset.
+	// 0 means no offset.  Else, the first pattern will be incomplete.  Subsequent patterns will be complete until the pattern changes.
 	// Can be 0-1 for 2:2, or anywhere from 0-4 on 2:3.  Anything beyond these ranges will be undefined.
 	// (This is a byte to save space on the AVR)
 	uint8_t u8PatternOffset;
