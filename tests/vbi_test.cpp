@@ -1,7 +1,7 @@
 #include "stdafx.h"
 #include <ldp-abst/VBICompact.h>
-#include "VBIParse.h"
-#include "VideoStandard.h"
+#include <ldp-abst/VBIParse.h>
+#include <ldp-abst/VideoStandard.h>
 
 void test_vbi_compact_1()
 {

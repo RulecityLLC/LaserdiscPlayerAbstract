@@ -1,5 +1,5 @@
 #include "stdafx.h"
-#include "VBIParse.h"
+#include "../include/ldp-abst/VBIParse.h"
 #include <ldp-abst/VBICompact.h>
 #include <list>
 
