@@ -1,5 +1,6 @@
 #include <ldp-abst/VideoStandard.h>
 #include <ldp-abst/VBIParse.h>
+#include <cstring>	// for memcpy
 #include <sstream>
 #include <list>
 

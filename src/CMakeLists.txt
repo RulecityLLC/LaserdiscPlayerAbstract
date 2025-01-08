@@ -49,3 +49,8 @@ target_include_directories(ldp_abst_util PUBLIC
 
 		# this will be populated when building but blank when installing
 		$<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>)
+
+# for mutation testing (we don't want to change all CXX flags because we don't want to mutate test runners/frameworks)
+if(DEFINED LDP_ABST_UTIL_COMPILE_OPTIONS)
+    target_compile_options(ldp_abst_util PRIVATE SHELL:${LDP_ABST_UTIL_COMPILE_OPTIONS})
+endif()

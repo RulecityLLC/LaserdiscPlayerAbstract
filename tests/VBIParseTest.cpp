@@ -2,6 +2,7 @@
 #include <ldp-abst/VBICompact.h>
 #include <ldp-abst/VBIParse.h>
 #include <ldp-abst/VideoStandard.h>
+#include <cstdio>	// for fopen
 
 template <typename T>
 using shared_array = std::shared_ptr<T[]>;
@@ -10,10 +11,11 @@ typedef shared_array<unsigned char> byteSA;
 
 void load_file_to_buf(unsigned char *pBuf, size_t bufLen, const char* filename)
 {
-	FILE *F;
-
-    errno_t err = fopen_s(&F, filename, "rb");
-    ASSERT_EQ(0, err);
+	FILE* F = fopen(filename, "rb");
+	if (F == nullptr)
+	{
+		throw std::runtime_error("Failed to open file");
+	}
 
     size_t stBytesRead = fread(pBuf, 1, bufLen, F);
 
@@ -24,10 +26,8 @@ void load_file_to_buf(unsigned char *pBuf, size_t bufLen, const char* filename)
 
 byteSA load_file(const char* filename)
 {
-	FILE *F;
-
-	errno_t err = fopen_s(&F, filename, "rb");
-	if (err != 0)
+	FILE* F = fopen(filename, "rb");
+	if (F == nullptr)
     {
           throw std::runtime_error("Failed to open file");
     }
