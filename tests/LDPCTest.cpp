@@ -238,7 +238,7 @@ void test_ldpc1()
 
 }
 
-TEST_CASE(ldpc1)
+TEST(LDPC, ldpc1)
 {
 	test_ldpc1();
 }
@@ -307,7 +307,7 @@ void test_ldpc_frame_boundary()
 	TEST_CHECK_EQUAL(1, u);
 }
 
-TEST_CASE(ldpc_frame_boundary)
+TEST(LDPC, ldpc_frame_boundary)
 {
 	test_ldpc_frame_boundary();
 }
@@ -356,7 +356,7 @@ void test_ldpc_frame_boundary_disc_begin()
 	TEST_CHECK_EQUAL(1, u);
 }
 
-TEST_CASE(ldpc_frame_boundary_disc_begin)
+TEST(LDPC, ldpc_frame_boundary_disc_begin)
 {
 	test_ldpc_frame_boundary_disc_begin();
 }
@@ -403,7 +403,7 @@ void test_ldpc2()
 
 }
 
-TEST_CASE(ldpc2)
+TEST(LDPC, ldpc2)
 {
 	test_ldpc2();
 }
@@ -449,7 +449,7 @@ void test_ldpc_wraparound0()
 	TEST_CHECK_EQUAL(0, field);
 }
 
-TEST_CASE(ldpc_wraparound0)
+TEST(LDPC, ldpc_wraparound0)
 {
 	test_ldpc_wraparound0();
 }
@@ -490,7 +490,7 @@ void test_ldpc_wraparound1()
 	TEST_CHECK_EQUAL(1, field);
 }
 
-TEST_CASE(ldpc_wraparound1)
+TEST(LDPC, ldpc_wraparound1)
 {
 	test_ldpc_wraparound1();
 }
@@ -550,7 +550,7 @@ void test_ldpc_wraparound_skip_rev()
 	TEST_CHECK_EQUAL(1, field);
 }
 
-TEST_CASE(ldpc_wraparound_skip_rev)
+TEST(LDPC, ldpc_wraparound_skip_rev)
 {
 	test_ldpc_wraparound_skip_rev();
 }
@@ -607,7 +607,7 @@ void test_ldpc_no_auto_jump()
 	TEST_CHECK_EQUAL(5, u);
 }
 
-TEST_CASE(ldpc_no_auto_jump)
+TEST(LDPC, ldpc_no_auto_jump)
 {
 	test_ldpc_no_auto_jump();
 }
@@ -648,7 +648,7 @@ void test_ldpc_search0()
 	TEST_CHECK_EQUAL(1, u);
 }
 
-TEST_CASE(ldpc_search0)
+TEST(LDPC, ldpc_search0)
 {
 	test_ldpc_search0();
 }
@@ -719,7 +719,7 @@ void test_ldpc_search_as_skip0()
 	TEST_CHECK_EQUAL(LDPC_PLAYING, ldpc_get_status());
 }
 
-TEST_CASE(ldpc_search_as_skip0)
+TEST(LDPC, ldpc_search_as_skip0)
 {
 	test_ldpc_search_as_skip0();
 }
@@ -757,7 +757,7 @@ void test_ldpc_skip_to_frame1()
 	TEST_CHECK_EQUAL(18, u);
 }
 
-TEST_CASE(ldpc_skip_to_frame1)
+TEST(LDPC, ldpc_skip_to_frame1)
 {
 	test_ldpc_skip_to_frame1();
 }
@@ -790,7 +790,7 @@ void test_ldpc_skip_to_frame2()
 	TEST_CHECK_EQUAL(18, u);
 }
 
-TEST_CASE(ldpc_skip_to_frame2)
+TEST(LDPC, ldpc_skip_to_frame2)
 {
 	test_ldpc_skip_to_frame2();
 }
@@ -936,7 +936,7 @@ void test_ldpc_skip_to_frame2246()
 	TEST_CHECK_EQUAL((2249*2)-2, u32CurAbsField);	// -2 because this is the top field
 }
 
-TEST_CASE(ldpc_skip_to_frame2246)
+TEST(LDPC, ldpc_skip_to_frame2246)
 {
 	test_ldpc_skip_to_frame2246();
 }
@@ -990,7 +990,7 @@ void test_ldpc_skip_to_frame1803()
 	TEST_CHECK_EQUAL(0xf81803, u32Line18);
 }
 
-TEST_CASE(ldpc_skip_to_frame1803)
+TEST(LDPC, ldpc_skip_to_frame1803)
 {
 	test_ldpc_skip_to_frame1803();
 }
@@ -1037,7 +1037,7 @@ void test_ldpc_spinup()
 
 }
 
-TEST_CASE(ldpc_spinup)
+TEST(LDPC, ldpc_spinup)
 {
 	test_ldpc_spinup();
 }
@@ -1096,7 +1096,7 @@ void test_ldpc_spinup_misbehave()
 
 }
 
-TEST_CASE(ldpc_spinup_misbehave)
+TEST(LDPC, ldpc_spinup_misbehave)
 {
 	test_ldpc_spinup_misbehave();
 }
@@ -1146,7 +1146,7 @@ void test_ldpc_audio_change()
 
 }
 
-TEST_CASE(ldpc_audio_change)
+TEST(LDPC, ldpc_audio_change)
 {
 	test_ldpc_audio_change();
 }
@@ -1196,7 +1196,7 @@ void test_ldpc_audio_squelch()
 	TEST_REQUIRE_EQUAL(LDPC_AUDIO_MUTED, stat);
 }
 
-TEST_CASE(ldpc_audio_squelch)
+TEST(LDPC, ldpc_audio_squelch)
 {
 	test_ldpc_audio_squelch();
 }
@@ -1278,7 +1278,7 @@ void test_ldpc_reverse1x()
 	TEST_CHECK_EQUAL(LDPC_AUDIO_STEREO, as);
 }
 
-TEST_CASE(ldpc_reverse1x)
+TEST(LDPC, ldpc_reverse1x)
 {
 	test_ldpc_reverse1x();
 }
@@ -1354,7 +1354,7 @@ void test_ldpc_reverse3x()
 
 }
 
-TEST_CASE(ldpc_reverse3x)
+TEST(LDPC, ldpc_reverse3x)
 {
 	test_ldpc_reverse3x();
 }
@@ -1407,7 +1407,7 @@ void test_ldpc_step_forward1()
 	TEST_CHECK_EQUAL(2, u);
 }
 
-TEST_CASE(ldpc_step_forward1)
+TEST(LDPC, ldpc_step_forward1)
 {
 	test_ldpc_step_forward1();
 }
@@ -1467,7 +1467,7 @@ void test_ldpc_step_forward2()
 	TEST_CHECK_EQUAL(2, u);
 }
 
-TEST_CASE(ldpc_step_forward2)
+TEST(LDPC, ldpc_step_forward2)
 {
 	test_ldpc_step_forward2();
 }
@@ -1537,7 +1537,7 @@ void test_ldpc_step_reverse1()
 	TEST_CHECK_EQUAL(LDPC_PAUSED, stat);
 }
 
-TEST_CASE(ldpc_step_reverse1)
+TEST(LDPC, ldpc_step_reverse1)
 {
 	test_ldpc_step_reverse1();
 }
@@ -1582,7 +1582,7 @@ void test_ldpc_step_reverse2()
 	TEST_CHECK_EQUAL(LDPC_PAUSED, stat);
 }
 
-TEST_CASE(ldpc_step_reverse2)
+TEST(LDPC, ldpc_step_reverse2)
 {
 	test_ldpc_step_reverse2();
 }
@@ -1648,7 +1648,7 @@ void test_ldpc_step_reverse23pulldown()
 	TEST_CHECK_EQUAL(0, u);
 }
 
-TEST_CASE(ldpc_step_reverse_23pulldown)
+TEST(LDPC, ldpc_step_reverse_23pulldown)
 {
 	test_ldpc_step_reverse23pulldown();
 }
@@ -1696,7 +1696,7 @@ void test_ldpc_pause_while_seeking()
 	TEST_CHECK_EQUAL(0, u);
 }
 
-TEST_CASE(ldpc_pause_while_seeking)
+TEST(LDPC, ldpc_pause_while_seeking)
 {
 	test_ldpc_pause_while_seeking();
 }
@@ -1787,7 +1787,7 @@ void test_ldpc_stopcode()
 	TEST_CHECK_EQUAL(LDPC_PAUSED, ldpc_get_status());
 }
 
-TEST_CASE(ldpc_stopcode)
+TEST(LDPC, ldpc_stopcode)
 {
 	test_ldpc_stopcode();
 }
@@ -1816,7 +1816,7 @@ void test_ldpc_video_mute()
 
 }
 
-TEST_CASE(ldpc_video_mute)
+TEST(LDPC, ldpc_video_mute)
 {
 	test_ldpc_video_mute();
 }

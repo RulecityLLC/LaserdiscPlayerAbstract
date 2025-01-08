@@ -1,7 +1,7 @@
 
 set(TEST_LDP_ABST_SRCS
-        vbi_test.cpp
-		ldpc_tests.cpp
+		VBICompactTest.cpp
+		LDPCTest.cpp
         stdafx.h
 		VBIParseTest.cpp
 		mpo_deleter.h
