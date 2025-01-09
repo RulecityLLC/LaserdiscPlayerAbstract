@@ -2,8 +2,8 @@
 #define VBIPARSE_H
 
 #include <ldp-abst/VBICompact.h>
-#include "VideoStandard.h"	// for VBI conversion
-#include "mpo_deleter.h"
+#include <ldp-abst/VideoStandard.h>
+#include "../../tests/mpo_deleter.h"
 #include <list>
 #include <vector>
 #include <string>

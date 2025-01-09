@@ -35,3 +35,22 @@ install(FILES ${LDP_ABST_PUBLIC_INCLUDE} DESTINATION "${include_dest}/ldp-abst")
 
 # goes into lib_dest so that Debug/Release is taken into account
 install(TARGETS ldp_abst EXPORT ldp_abst DESTINATION "${lib_dest}")
+
+#########################################################################################
+
+add_library(ldp_abst_util ${header_path}/VideoStandard.h VBIParse.cpp ../include/ldp-abst/VBIParse.h)
+
+# So that anything that links to our lib gets the headers for all dependencies
+target_include_directories(ldp_abst_util PUBLIC
+
+		# this will be populated when installing but blank when building
+		# for client in install mode
+		$<INSTALL_INTERFACE:${include_dest}>
+
+		# this will be populated when building but blank when installing
+		$<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>)
+
+# for mutation testing (we don't want to change all CXX flags because we don't want to mutate test runners/frameworks)
+if(DEFINED LDP_ABST_UTIL_COMPILE_OPTIONS)
+    target_compile_options(ldp_abst_util PRIVATE SHELL:${LDP_ABST_UTIL_COMPILE_OPTIONS})
+endif()
