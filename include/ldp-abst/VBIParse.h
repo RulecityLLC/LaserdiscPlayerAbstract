@@ -3,7 +3,7 @@
 
 #include <ldp-abst/VBICompact.h>
 #include <ldp-abst/VideoStandard.h>
-#include "../../tests/mpo_deleter.h"
+#include "mpo_deleter.h"
 #include <list>
 #include <vector>
 #include <string>

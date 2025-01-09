@@ -38,10 +38,15 @@ install(TARGETS ldp_abst EXPORT ldp_abst DESTINATION "${lib_dest}")
 
 #########################################################################################
 
-add_library(ldp_abst_util ${header_path}/VideoStandard.h VBIParse.cpp ../include/ldp-abst/VBIParse.h)
+# AVR builds will not want this (it probably won't even build)
+# the unit tests rely on this library being build so we'd have to decouple that if we are going to use a different variable
+if (BUILD_TESTING)
 
-# So that anything that links to our lib gets the headers for all dependencies
-target_include_directories(ldp_abst_util PUBLIC
+	# This library is separate because it's written in C++ and the AVR builds can only consume C libraries.
+  add_library(ldp_abst_util ${header_path}/VideoStandard.h VBIParse.cpp ${header_path}/VBIParse.h)
+
+  # So that anything that links to our lib gets the headers for all dependencies
+  target_include_directories(ldp_abst_util PUBLIC
 
 		# this will be populated when installing but blank when building
 		# for client in install mode
@@ -50,7 +55,9 @@ target_include_directories(ldp_abst_util PUBLIC
 		# this will be populated when building but blank when installing
 		$<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>)
 
-# for mutation testing (we don't want to change all CXX flags because we don't want to mutate test runners/frameworks)
-if(DEFINED LDP_ABST_UTIL_COMPILE_OPTIONS)
+  # for mutation testing (we don't want to change all CXX flags because we don't want to mutate test runners/frameworks)
+  if(DEFINED LDP_ABST_UTIL_COMPILE_OPTIONS)
     target_compile_options(ldp_abst_util PRIVATE SHELL:${LDP_ABST_UTIL_COMPILE_OPTIONS})
+  endif()
+
 endif()

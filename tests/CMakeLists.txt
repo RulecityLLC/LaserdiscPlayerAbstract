@@ -4,7 +4,6 @@ set(TEST_LDP_ABST_SRCS
 		LDPCTest.cpp
         stdafx.h
 		VBIParseTest.cpp
-		mpo_deleter.h
 )
 
 # we want all test helper files to be in the same dir as the test exe
