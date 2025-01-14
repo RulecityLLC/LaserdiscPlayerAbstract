@@ -85,7 +85,20 @@ typedef struct VBICompactEntry_s
 	// In other words, if a chapter exists, it must always be specified for every entry.
 	uint16_t u16Special;
 
-	// Offset from the start of the pattern (as defined in the comments for the enum's above)
+	// Offset from the start of the pattern.
+	//
+	// Imagine a 2:2 Atari pattern where the second element of the pattern (0xA800001) is the first element seen on the disc (ie on field 0).
+	//
+	// | VBI data	| Absolute field where this VBI data lives (or would live)
+	// |------------|---------------------------------------------------------
+	// | 0xF800001	| -1 (an invalid number, but just for demonstration)
+	// | 0xA800001	| 0
+	// | 0xF800002	| 1
+	// | 0xA800002	| 2
+	//
+	// The offset is the field where the pattern is first seen minus the field where the pattern actually starts (or would actually start).
+	// So in this example, the offset is 1 because the pattern is first scene on field 0 but actually would start on -1 (if that were a valid absolute field).  And 0 minus -1 is 1.
+
 	// 0 means no offset.  Else, the first pattern will be incomplete.  Subsequent patterns will be complete until the pattern changes.
 	// Can be 0-1 for 2:2, or anywhere from 0-4 on 2:3.  Anything beyond these ranges will be undefined.
 	// (This is a byte to save space on the AVR)

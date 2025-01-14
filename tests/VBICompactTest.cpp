@@ -1123,6 +1123,45 @@ TEST(VBICompact, vbi_compact_out_of_range_22_1Offset_leadout)
 	test_vbi_compact_out_of_range_22_1Offset_leadout();
 }
 
+void test_vbi_compact_tq_hal_side1()
+{
+	VBICompactEntry_t entries[2];
+
+	entries[0].typePattern = PATTERN_LEADIN;
+	entries[0].u32StartAbsField = 0;
+	entries[0].i32StartPictureNumber = 0;
+	entries[0].u8PatternOffset = 0;
+
+	entries[1].typePattern = PATTERN_23;
+	entries[1].u32StartAbsField = 1;
+	entries[1].i32StartPictureNumber = 0;
+	entries[1].u8PatternOffset = 2;
+
+	VBICompact_t vbi;
+	vbi.pEntries = entries;
+	vbi.uEntryCount = sizeof(entries) / sizeof(entries[0]);
+	vbi.uTotalFields = 1000;	// arbitrary
+
+	VBIC_Init(&vbi);
+
+	// actual defect: seeking to picture number 1 was returning an error
+	VBIC_SeekResult res = VBIC_SEEK_BUSY;
+	res = VBIC_SEEK(1);
+
+	// should succeed and land on picture number 1
+	TEST_CHECK(res == VBIC_SEEK_SUCCESS);
+
+	uint32_t u32PicNum = VBIC_GetCurPictureNum();
+	TEST_CHECK_EQUAL(1, u32PicNum);
+	uint32_t u32AbsField = VBIC_GetCurAbsField();
+	TEST_CHECK_EQUAL(1, u32AbsField);
+}
+
+TEST(VBICompact, vbi_compact_tq_hal_side1)
+{
+	test_vbi_compact_tq_hal_side1();
+}
+
 /////////////////////////////////////////////////////////////////////////////////////////////////////
 
 void test_vbi_compactor23()

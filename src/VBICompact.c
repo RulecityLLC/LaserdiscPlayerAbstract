@@ -165,15 +165,10 @@ VBIC_SeekResult VBIC_SeekInternal(uint32_t uFrameNum, uint32_t *pPeekOnly)
 			iStartFrameNum += pEntry->u8PatternOffset;
 			break;
 		case PATTERN_23:
-			// if offset is 1, then the start frame should be 1 more.  if offset is 0, then no change
-			if (pEntry->u8PatternOffset < 2)
+			if (pEntry->u8PatternOffset != 0)
 			{
-				iStartFrameNum += pEntry->u8PatternOffset;
-			}
-			// else if offset is 2, 3, or 4 then the start frame should be 2 more.
-			else
-			{
-				iStartFrameNum += 2;
+				// to get correct results, this is what needs to happen.  I played around with it until it worked, and I didn't spend the time to fully understand why it works.
+				iStartFrameNum += (pEntry->u8PatternOffset < 3) ? 1 : 2;
 			}
 			break;
 		default:
