@@ -2205,10 +2205,11 @@ void test_vbi_buffer1()
 
 	TEST_REQUIRE(!res);	// should fail if we set the max size too low
 
-	// now try again with the proper max size
+	// now try again with the proper max size — pin the exact success value so
+	// the VBIC_TRUE assignment can't be replaced with 42 (both would satisfy != 0)
 	res = VBIC_FromBuffer(&compact, 1, buf, stRes);
 
-	TEST_REQUIRE(res != 0);
+	TEST_REQUIRE_EQUAL(VBIC_TRUE, res);
 
 	// compare the results to see if we got it right
 	VBICompactEntry_t correct = lstEntries.front();
@@ -2449,6 +2450,403 @@ TEST(VBICompact, vbic_buffer_too_small)
 	test_vbic_buffer_too_small();
 }
 
+void test_vbic_tobuffer_bytes()
+{
+	// Asserts the specific byte layout VBIC_ToBuffer produces, so the two
+	// `>> 8` / `>> 16` shifts on uTotalFields (would become `<<` under mutation)
+	// produce clearly wrong output. Also verifies round-trip exact fields.
+	VBICompactEntry_t src[2];
+	src[0].u32StartAbsField = 0x11223344;
+	src[0].i32StartPictureNumber = 10;
+	src[0].typePattern = PATTERN_22;
+	src[0].u16Special = 0x5566;
+	src[0].u8PatternOffset = 1;
+
+	src[1].u32StartAbsField = 0xAABBCCDD;
+	src[1].i32StartPictureNumber = 20;
+	src[1].typePattern = PATTERN_23;
+	src[1].u16Special = 0x7788;
+	src[1].u8PatternOffset = 2;
+
+	VBICompact_t compact;
+	compact.uEntryCount = 2;
+	compact.pEntries = src;
+	compact.uTotalFields = 0xA1B2C3D4;	// every byte distinct, so shifts are observable
+
+	unsigned char buf[100];
+	memset(buf, 0xEE, sizeof(buf));
+	size_t stRes = VBIC_ToBuffer(buf, sizeof(buf), &compact);
+
+	// 6 header bytes + 2 entries * 12 bytes each = 30
+	TEST_CHECK_EQUAL((size_t) 30, stRes);
+
+	// Exact-size buffer (30 bytes) must still succeed: pins the `stBufSize >= uBytesNeeded`
+	// comparator at VBICompact.c:548 (original: 30 >= 30 passes; `>` variant
+	// would treat 30 > 30 as false and return 0).
+	unsigned char bufExact[30];
+	stRes = VBIC_ToBuffer(bufExact, sizeof(bufExact), &compact);
+	TEST_CHECK_EQUAL((size_t) 30, stRes);
+
+	// One byte short must fail.
+	unsigned char bufShort[29];
+	stRes = VBIC_ToBuffer(bufShort, sizeof(bufShort), &compact);
+	TEST_CHECK_EQUAL((size_t) 0, stRes);
+
+	// Now rebuild stRes for the round-trip below by going back to the full buffer.
+	memset(buf, 0xEE, sizeof(buf));
+	stRes = VBIC_ToBuffer(buf, sizeof(buf), &compact);
+	TEST_CHECK_EQUAL((size_t) 30, stRes);
+
+	TEST_CHECK_EQUAL(0, buf[0]);		// version
+	TEST_CHECK_EQUAL(2, buf[1]);		// entry count (2 & 0xFF)
+	TEST_CHECK_EQUAL(0xD4, buf[2]);		// uTotalFields LSB
+	TEST_CHECK_EQUAL(0xC3, buf[3]);		// byte 1 -> (>> 8)
+	TEST_CHECK_EQUAL(0xB2, buf[4]);		// byte 2 -> (>> 16)
+	TEST_CHECK_EQUAL(0xA1, buf[5]);		// MSB
+
+	// Round-trip and verify entry fields preserved exactly.
+	VBICompactEntry_t dstEntries[2];
+	VBICompact_t dst;
+	dst.pEntries = dstEntries;
+	VBIC_BOOL res = VBIC_FromBuffer(&dst, 2, buf, stRes);
+	TEST_CHECK_EQUAL(VBIC_TRUE, res);
+	TEST_CHECK_EQUAL(2u, dst.uEntryCount);
+	TEST_CHECK_EQUAL(0xA1B2C3D4u, dst.uTotalFields);
+
+	TEST_CHECK_EQUAL(src[0].u32StartAbsField, dstEntries[0].u32StartAbsField);
+	TEST_CHECK_EQUAL(src[0].i32StartPictureNumber, dstEntries[0].i32StartPictureNumber);
+	TEST_CHECK_EQUAL(src[0].typePattern, dstEntries[0].typePattern);
+	TEST_CHECK_EQUAL(src[0].u16Special, dstEntries[0].u16Special);
+	TEST_CHECK_EQUAL(src[0].u8PatternOffset, dstEntries[0].u8PatternOffset);
+
+	TEST_CHECK_EQUAL(src[1].u32StartAbsField, dstEntries[1].u32StartAbsField);
+	TEST_CHECK_EQUAL(src[1].i32StartPictureNumber, dstEntries[1].i32StartPictureNumber);
+	TEST_CHECK_EQUAL(src[1].typePattern, dstEntries[1].typePattern);
+	TEST_CHECK_EQUAL(src[1].u16Special, dstEntries[1].u16Special);
+	TEST_CHECK_EQUAL(src[1].u8PatternOffset, dstEntries[1].u8PatternOffset);
+}
+
+TEST(VBICompact, vbic_tobuffer_bytes)
+{
+	test_vbic_tobuffer_bytes();
+}
+
+void test_vbic_setfield_entry_walk()
+{
+	// Builds a 3-entry VBIC (PICNUM, PICNUM, PICNUM) and uses VBIC_SetField to
+	// walk across entry boundaries in both directions. Pins the `pEntry->u32StartAbsField > u32CurAbsField`
+	// boundary in the backward-walk loop (VBICompact.c:105) and `bMovedForward = VBIC_TRUE` at line 84.
+	VBICompactEntry_t entries[3];
+
+	entries[0].u32StartAbsField = 0;
+	entries[0].i32StartPictureNumber = 10;
+	entries[0].typePattern = PATTERN_PICNUM;
+	entries[0].u16Special = 0;
+	entries[0].u8PatternOffset = 0;
+
+	entries[1].u32StartAbsField = 100;
+	entries[1].i32StartPictureNumber = 20;
+	entries[1].typePattern = PATTERN_PICNUM;
+	entries[1].u16Special = 0;
+	entries[1].u8PatternOffset = 0;
+
+	entries[2].u32StartAbsField = 200;
+	entries[2].i32StartPictureNumber = 30;
+	entries[2].typePattern = PATTERN_PICNUM;
+	entries[2].u16Special = 0;
+	entries[2].u8PatternOffset = 0;
+
+	VBICompact_t compact;
+	compact.uEntryCount = 3;
+	compact.pEntries = entries;
+	compact.uTotalFields = 300;
+
+	VBIC_Init(&compact);
+
+	// Jump forward into the middle entry — picture number should come from
+	// that entry, not the first.
+	VBIC_SetField(150);
+	TEST_CHECK_EQUAL(20u, VBIC_GetCurPictureNum());
+	TEST_CHECK_EQUAL(150u, VBIC_GetCurAbsField());
+
+	// Jump to the exact boundary of the 3rd entry. The backward-walk check
+	// uses `>`, so u32StartAbsField (200) > u32CurAbsField (200) is FALSE —
+	// we must land on entry 2, returning picnum 30, not walk backward.
+	VBIC_SetField(200);
+	TEST_CHECK_EQUAL(30u, VBIC_GetCurPictureNum());
+
+	// Jump backward across two entries — must walk back to entry 0.
+	VBIC_SetField(50);
+	TEST_CHECK_EQUAL(10u, VBIC_GetCurPictureNum());
+
+	// Jump forward again.
+	VBIC_SetField(250);
+	TEST_CHECK_EQUAL(30u, VBIC_GetCurPictureNum());
+
+	// Backward walk exact-boundary: after landing in entry 2 (field 250), jump
+	// to entry 1's start boundary (field 100). Backward walk must stop at
+	// entry 1, NOT step further back to entry 0 — pins the `pEntry->u32StartAbsField > u32CurAbsField`
+	// comparator at VBICompact.c:105 (a `>=` variant would step past).
+	VBIC_SetField(100);
+	TEST_CHECK_EQUAL(20u, VBIC_GetCurPictureNum());
+}
+
+TEST(VBICompact, vbic_setfield_entry_walk)
+{
+	test_vbic_setfield_entry_walk();
+}
+
+void test_vbic_loadline18_negative_offset()
+{
+	// Exercise VBIC_LoadLine18 with a negative field offset. This hits the
+	// `while (iFieldOffsetFromEntryStart < 0)` loop that pins:
+	//   - PATTERN_22 branch: uAdder = 2 (line 389)
+	//   - PATTERN_23 branch: uAdder = 5 (line 392)
+	//   - `iFieldOffsetFromEntryStart += uAdder` (line 404)
+	//   - `lPicNumOffset--` (line 405)
+	// and the `< 0` comparator on line 402.
+	VBICompactEntry_t entry;
+
+	// PATTERN_22: picnum 10 at field 10. LoadLine18 with offset -2 should walk
+	// forward by 2 (adder=2), giving iFieldOffsetFromEntryStart=0 and
+	// lPicNumOffset=-1, so the "rendered" picture number drops by 1 to 9.
+	entry.u32StartAbsField = 10;
+	entry.i32StartPictureNumber = 10;
+	entry.typePattern = PATTERN_22;
+	entry.u16Special = 0;
+	entry.u8PatternOffset = 0;
+
+	VBICompactEntry_t dummyEntries[1];
+	dummyEntries[0] = entry;
+	VBICompact_t compact;
+	compact.uEntryCount = 1;
+	compact.pEntries = dummyEntries;
+	compact.uTotalFields = 100;
+	VBIC_Init(&compact);
+
+	VBIC_LoadLine18(&entry, -2);
+	// After one iteration, iFieldOffsetFromEntryStart becomes 0 (even) so the
+	// PATTERN_22 branch assigns u32CurPictureNum = basePictureNumber + 0 = 10.
+	// If the `< 0` loop guard flips (loop over-runs), the offset walks to 2 and
+	// u32CurPictureNum would become 11. If `+=` becomes `-=` the loop never
+	// terminates.
+	TEST_CHECK_EQUAL(10u, VBIC_GetCurPictureNum());
+
+	// Offset -4 with adder=2 -> 2 iterations, offset ends at 0, picnum = 10.
+	VBIC_LoadLine18(&entry, -4);
+	TEST_CHECK_EQUAL(10u, VBIC_GetCurPictureNum());
+
+	// PATTERN_23: picnum 10 at field 10. adder=5. offset -5 -> 1 iter, offset
+	// ends at 0. Remainder 0 -> u32PicNum = base + 0 = 10.
+	entry.typePattern = PATTERN_23;
+	dummyEntries[0] = entry;
+	VBIC_Init(&compact);
+	VBIC_LoadLine18(&entry, -5);
+	TEST_CHECK_EQUAL(10u, VBIC_GetCurPictureNum());
+}
+
+TEST(VBICompact, vbic_loadline18_negative_offset)
+{
+	test_vbic_loadline18_negative_offset();
+}
+
+void test_vbic_loadline18_22_bcd()
+{
+	// Load PATTERN_22 with picture number 12345 (non-trivial BCD digits so the
+	// << 4 shift in VBIC_2BCD differs from >> 4). GetCurFieldLine18 returns
+	// the 24-bit BCD-encoded line, which pins VBIC_2BCD's byte computations
+	// (lines 33, 34) and the pu8CurLine18[0] |= 0xF8 bit.
+	VBICompactEntry_t entry;
+	entry.u32StartAbsField = 0;
+	entry.i32StartPictureNumber = 12345;
+	entry.typePattern = PATTERN_22;
+	entry.u16Special = 0;
+	entry.u8PatternOffset = 0;
+
+	VBICompactEntry_t entries[1];
+	entries[0] = entry;
+	VBICompact_t compact;
+	compact.uEntryCount = 1;
+	compact.pEntries = entries;
+	compact.uTotalFields = 100;
+	VBIC_Init(&compact);
+
+	// Field 0 is the even frame start of PATTERN_22 at picnum 12345.
+	// VBIC_2BCD("012345") produces bytes 0x01, 0x23, 0x45; then [0] |= 0xF8 = 0xF9.
+	// GetCurFieldLine18 packs as (0xF9 << 16) | (0x23 << 8) | 0x45 = 0xF92345.
+	VBIC_SetField(0);
+	TEST_CHECK_EQUAL(12345u, VBIC_GetCurPictureNum());
+	TEST_CHECK_EQUAL(0xF92345u, VBIC_GetCurFieldLine18());
+}
+
+TEST(VBICompact, vbic_loadline18_22_bcd)
+{
+	test_vbic_loadline18_22_bcd();
+}
+
+void test_vbic_seek_clamping()
+{
+	// PATTERN_22 at picnum 1 starting at field 0. With uTotalFields = 10
+	// (uMaxFieldIdx = 9), seeking frame 10 computes uFinalField = 18 which is
+	// > 9, so the clamping branch at VBICompact.c:301-320 adjusts both the
+	// final field and the frame number. Pins the `uFinalField > uMaxFieldIdx`
+	// comparator (line 301) when it's genuinely out of range, and the PATTERN_22
+	// adjustment path.
+	VBICompactEntry_t entries[1];
+	entries[0].u32StartAbsField = 0;
+	entries[0].i32StartPictureNumber = 1;
+	entries[0].typePattern = PATTERN_22;
+	entries[0].u16Special = 0;
+	entries[0].u8PatternOffset = 0;
+
+	VBICompact_t compact;
+	compact.uEntryCount = 1;
+	compact.pEntries = entries;
+	compact.uTotalFields = 10;
+
+	VBIC_Init(&compact);
+
+	// Seek frame 5 (within range): final field = 8, picnum still 5.
+	VBIC_SeekResult r = VBIC_SEEK(5);
+	TEST_CHECK_EQUAL(VBIC_SEEK_SUCCESS, r);
+	TEST_CHECK_EQUAL(8u, VBIC_GetCurAbsField());
+	TEST_CHECK_EQUAL(5u, VBIC_GetCurPictureNum());
+
+	// Seek frame 10 (out of range): proposed final field = 18, uMaxFieldIdx = 9.
+	// Delta = 9, odd, so delta++ -> 10. uFinalField = 18 - 10 = 8. uFrameNum = 10 - 5 = 5.
+	r = VBIC_SEEK(10);
+	TEST_CHECK_EQUAL(VBIC_SEEK_SUCCESS, r);
+	TEST_CHECK_EQUAL(8u, VBIC_GetCurAbsField());
+	TEST_CHECK_EQUAL(5u, VBIC_GetCurPictureNum());
+
+	// Peek-only variant should not modify state.
+	VBIC_Init(&compact);
+	uint32_t uPeekField = 0xDEADBEEF;
+	r = VBIC_LOOKUP_FIELD_FOR_FRAMENUM(3, &uPeekField);
+	TEST_CHECK_EQUAL(VBIC_SEEK_SUCCESS, r);
+	// Peek doesn't update state -> curAbsField still 0 from VBIC_Init.
+	TEST_CHECK_EQUAL(0u, VBIC_GetCurAbsField());
+}
+
+TEST(VBICompact, vbic_seek_clamping)
+{
+	test_vbic_seek_clamping();
+}
+
+void test_vbic_frombuffer_zero_entries()
+{
+	// Build a valid VBIC header with zero entries. VBIC_FromBuffer must leave
+	// dstEntries untouched (loop doesn't execute). Pins the `u < u8NumEntries`
+	// loop guard at VBICompact.c:619 (`<= 0` variant would enter the loop once
+	// and overwrite dstEntries[0]).
+	unsigned char buf[6];
+	buf[0] = 0;			// version
+	buf[1] = 0;			// num entries
+	buf[2] = 0x78;
+	buf[3] = 0x56;
+	buf[4] = 0x34;
+	buf[5] = 0x12;		// uTotalFields = 0x12345678
+
+	VBICompactEntry_t dstEntries[2];
+	memset(dstEntries, 0xAA, sizeof(dstEntries));
+	VBICompact_t dst;
+	dst.pEntries = dstEntries;
+	dst.uEntryCount = 99;
+	dst.uTotalFields = 99;
+
+	VBIC_BOOL res = VBIC_FromBuffer(&dst, 2, buf, sizeof(buf));
+	TEST_CHECK_EQUAL(VBIC_TRUE, res);
+	TEST_CHECK_EQUAL(0u, dst.uEntryCount);
+	TEST_CHECK_EQUAL(0x12345678u, dst.uTotalFields);
+
+	// dstEntries[0] must be untouched — all 0xAA bytes.
+	const unsigned char *p = reinterpret_cast<const unsigned char *>(&dstEntries[0]);
+	for (size_t i = 0; i < sizeof(VBICompactEntry_t); i++)
+	{
+		TEST_CHECK_EQUAL((unsigned char) 0xAA, p[i]);
+	}
+}
+
+TEST(VBICompact, vbic_frombuffer_zero_entries)
+{
+	test_vbic_frombuffer_zero_entries();
+}
+
+void test_vbic_tobuffer_zero_entries_and_rejection()
+{
+	// 0 entries: ToBuffer needs 6 header bytes only. Verify bytes are correct
+	// and the loop at VBICompact.c:559 doesn't run (similar to above).
+	VBICompact_t compact;
+	compact.uEntryCount = 0;
+	compact.pEntries = NULL;
+	compact.uTotalFields = 0x0A0B0C0D;
+
+	unsigned char buf[20];
+	memset(buf, 0xFF, sizeof(buf));
+	size_t stRes = VBIC_ToBuffer(buf, sizeof(buf), &compact);
+	TEST_CHECK_EQUAL((size_t) 6, stRes);
+
+	TEST_CHECK_EQUAL(0, buf[0]);		// version
+	TEST_CHECK_EQUAL(0, buf[1]);		// count
+	TEST_CHECK_EQUAL(0x0D, buf[2]);	// low byte of totalFields
+	TEST_CHECK_EQUAL(0x0C, buf[3]);
+	TEST_CHECK_EQUAL(0x0B, buf[4]);
+	TEST_CHECK_EQUAL(0x0A, buf[5]);	// high byte
+	// Bytes past 5 must remain 0xFF (untouched).
+	TEST_CHECK_EQUAL((unsigned char) 0xFF, buf[6]);
+}
+
+TEST(VBICompact, vbic_tobuffer_zero_entries_and_rejection)
+{
+	test_vbic_tobuffer_zero_entries_and_rejection();
+}
+
+void test_vbic_seek_fail_paths()
+{
+	// First entry is PATTERN_LEADIN with i32StartPictureNumber > sought frame
+	// AND non-zero u8PatternOffset. VBIC_SeekInternal's entry-scan loop breaks
+	// on the first entry because iStartFrameNum(10) > uFrameNum(1), leaving
+	// i == 0 at the loop exit. That opens the `if (i == 0)` branch, which
+	// consults u8PatternOffset; with a non-2:2/2:3 pattern it falls into the
+	// default case at VBICompact.c:215-217 (res = VBIC_SEEK_FAIL; goto done).
+	VBICompactEntry_t leadInOff[1];
+	leadInOff[0].u32StartAbsField = 0;
+	leadInOff[0].i32StartPictureNumber = 10;	// > sought frame below
+	leadInOff[0].typePattern = PATTERN_LEADIN;
+	leadInOff[0].u16Special = 0;
+	leadInOff[0].u8PatternOffset = 1;	// non-zero -> hits the inner switch
+
+	VBICompact_t c;
+	c.uEntryCount = 1;
+	c.pEntries = leadInOff;
+	c.uTotalFields = 50;
+
+	VBIC_Init(&c);
+
+	VBIC_SeekResult r = VBIC_SEEK(1);
+	TEST_CHECK_EQUAL(VBIC_SEEK_FAIL, r);
+
+	// Second scenario: first entry is PATTERN_LEADOUT with offset 0 — this hits
+	// the outer switch default (VBICompact.c:277-280) setting res = VBIC_SEEK_FAIL.
+	VBICompactEntry_t leadOut[1];
+	leadOut[0].u32StartAbsField = 0;
+	leadOut[0].i32StartPictureNumber = 0;
+	leadOut[0].typePattern = PATTERN_LEADOUT;
+	leadOut[0].u16Special = 0;
+	leadOut[0].u8PatternOffset = 0;
+
+	c.pEntries = leadOut;
+	VBIC_Init(&c);
+
+	r = VBIC_SEEK(3);
+	TEST_CHECK_EQUAL(VBIC_SEEK_FAIL, r);
+}
+
+TEST(VBICompact, vbic_seek_fail_paths)
+{
+	test_vbic_seek_fail_paths();
+}
+
 void test_vbic_line18_zeroes_and_leadin_leadout()
 {
 	// Builds an entry with PATTERN_ZEROES and verifies VBIC_GetCurFieldLine18
@@ -2479,6 +2877,11 @@ void test_vbic_line18_zeroes_and_leadin_leadout()
 	entries[2].u8PatternOffset = 0;
 
 	VBIC_Init(&compact);
+
+	// Pins VBIC_Init's `u32CurPictureNum = 0` initializer (line ~17). With the
+	// first entry being PATTERN_ZEROES, LoadLine18 doesn't touch this field,
+	// so the initializer is what gets observed.
+	TEST_CHECK_EQUAL(0u, VBIC_GetCurPictureNum());
 
 	// field 0 -> ZEROES pattern -> line18 must read as 0x000000
 	VBIC_SetField(0);

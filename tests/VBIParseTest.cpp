@@ -490,3 +490,342 @@ TEST(VBIParse, vbi_decimal_conversions)
 {
 	test_vbi_decimal_conversions();
 }
+
+void test_vbi_save_load_round_trip()
+{
+	// Tests SaveVBIData / LoadVBIData / GetVBIData / GetVBIDataCount with enough
+	// specificity to kill off-by-one loop mutants (< vs <=), ne/eq swaps on the
+	// white-flag byte, and error-path mutants that remove error-message pushes.
+	VBIParseSPtr VBISPtr = VBIParse::GetInstance();
+	VBIParse *pVBI = VBISPtr.get();
+
+	pVBI->ClearVBIData();
+	TEST_CHECK_EQUAL(0u, pVBI->GetVBIDataCount());
+
+	VBI_t a;
+	a.bWhiteFlag = true;	// one true, one false so mutants that flip != to == on the byte get caught
+	a.uVBI[0] = 0x112233;
+	a.uVBI[1] = 0x445566;
+	a.uVBI[2] = 0x778899;
+
+	VBI_t b;
+	b.bWhiteFlag = false;
+	b.uVBI[0] = 0xAABBCC;
+	b.uVBI[1] = 0xDDEEFF;
+	b.uVBI[2] = 0x010203;
+
+	pVBI->AddVBIData(a);
+	pVBI->AddVBIData(b);
+	TEST_CHECK_EQUAL(2u, pVBI->GetVBIDataCount());
+
+	string strBuf = pVBI->SaveVBIData();
+
+	// header (4 bytes "1VBI") + 2 entries * 10 bytes each = 24 bytes exactly.
+	TEST_CHECK_EQUAL(24u, strBuf.size());
+
+	// Verify header, then byte-by-byte contents of each entry — this pins
+	// the inner `< 3` loop in SaveVBIData (so `<= 3` would write extra bytes)
+	// and the bWhiteFlag byte assignment.
+	const unsigned char *p = reinterpret_cast<const unsigned char *>(strBuf.data());
+	TEST_CHECK_EQUAL('1', p[0]);
+	TEST_CHECK_EQUAL('V', p[1]);
+	TEST_CHECK_EQUAL('B', p[2]);
+	TEST_CHECK_EQUAL('I', p[3]);
+
+	// entry a
+	TEST_CHECK_EQUAL(1, p[4]);		// bWhiteFlag = true
+	TEST_CHECK_EQUAL(0x11, p[5]);
+	TEST_CHECK_EQUAL(0x22, p[6]);
+	TEST_CHECK_EQUAL(0x33, p[7]);
+	TEST_CHECK_EQUAL(0x44, p[8]);
+	TEST_CHECK_EQUAL(0x55, p[9]);
+	TEST_CHECK_EQUAL(0x66, p[10]);
+	TEST_CHECK_EQUAL(0x77, p[11]);
+	TEST_CHECK_EQUAL(0x88, p[12]);
+	TEST_CHECK_EQUAL(0x99, p[13]);
+
+	// entry b
+	TEST_CHECK_EQUAL(0, p[14]);		// bWhiteFlag = false
+	TEST_CHECK_EQUAL(0xAA, p[15]);
+	TEST_CHECK_EQUAL(0xBB, p[16]);
+	TEST_CHECK_EQUAL(0xCC, p[17]);
+	TEST_CHECK_EQUAL(0xDD, p[18]);
+	TEST_CHECK_EQUAL(0xEE, p[19]);
+	TEST_CHECK_EQUAL(0xFF, p[20]);
+	TEST_CHECK_EQUAL(0x01, p[21]);
+	TEST_CHECK_EQUAL(0x02, p[22]);
+	TEST_CHECK_EQUAL(0x03, p[23]);
+
+	// Round-trip through LoadVBIData. This also pins the `stByteCount += ...`
+	// accumulator (mutating it to `-=` makes the loop terminate immediately,
+	// leaving the loaded count at 0).
+	pVBI->ClearVBIData();
+	TEST_CHECK_EQUAL(0u, pVBI->GetVBIDataCount());
+	bool bLoaded = pVBI->LoadVBIData(strBuf.data(), strBuf.size());
+	TEST_CHECK(bLoaded == true);
+	TEST_CHECK_EQUAL(2u, pVBI->GetVBIDataCount());
+
+	// Verify each loaded entry field-for-field. White-flag true must come back
+	// as true (pins the `!= 0` test on the byte).
+	VBI_t got;
+	TEST_CHECK(pVBI->GetVBIData(got, 0) == true);
+	TEST_CHECK(got.bWhiteFlag == true);
+	TEST_CHECK_EQUAL(0x112233u, got.uVBI[0]);
+	TEST_CHECK_EQUAL(0x445566u, got.uVBI[1]);
+	TEST_CHECK_EQUAL(0x778899u, got.uVBI[2]);
+
+	TEST_CHECK(pVBI->GetVBIData(got, 1) == true);
+	TEST_CHECK(got.bWhiteFlag == false);
+	TEST_CHECK_EQUAL(0xAABBCCu, got.uVBI[0]);
+	TEST_CHECK_EQUAL(0xDDEEFFu, got.uVBI[1]);
+	TEST_CHECK_EQUAL(0x010203u, got.uVBI[2]);
+
+	// Out-of-range GetVBIData must return false.
+	TEST_CHECK(pVBI->GetVBIData(got, 2) == false);
+
+	// --- error paths: each must record a message (pins the m_lstErrors.push_back
+	// calls that would otherwise be dropped by cxx_remove_void_call) ---
+
+	// bad version header
+	unsigned char bad[14] = { 'X', 'V', 'B', 'I', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+	bool bLoad = pVBI->LoadVBIData(bad, sizeof(bad));
+	TEST_CHECK(bLoad == false);
+	list<string> errs = pVBI->GetErrors();
+	TEST_CHECK(errs.size() > 0);
+
+	// bad size (not a multiple of 10 after the 4-byte header)
+	unsigned char badSize[7] = { '1', 'V', 'B', 'I', 0, 0, 0 };
+	bLoad = pVBI->LoadVBIData(badSize, sizeof(badSize));
+	TEST_CHECK(bLoad == false);
+	errs = pVBI->GetErrors();
+	TEST_CHECK(errs.size() > 0);
+
+	pVBI->ClearVBIData();
+	TEST_CHECK_EQUAL(0u, pVBI->GetVBIDataCount());
+}
+
+TEST(VBIParse, vbi_save_load_round_trip)
+{
+	test_vbi_save_load_round_trip();
+}
+
+void test_vbi_get_best_line1718()
+{
+	// Exercises each branch of GetBestLine1718 with exact input/output checks so
+	// cxx_assign_const, cxx_replace_scalar_call, and cxx_eq_to_ne mutants in the
+	// branch ladder are killed.
+	unsigned int uLine1718 = 0;
+	bool bRes = false;
+
+	// Branch 1: both lines equal, both not PARSE_FAILED -> result is that value.
+	VBI_t vgb;
+	vgb.bWhiteFlag = false;
+	vgb.uVBI[0] = 0;
+	vgb.uVBI[1] = 0xF80042;
+	vgb.uVBI[2] = 0xF80042;
+	bRes = VBIParse::GetBestLine1718(uLine1718, vgb, NTSC);
+	TEST_CHECK(bRes == true);
+	TEST_CHECK_EQUAL(0xF80042u, uLine1718);
+
+	// Branch 2: line17 undefined (0), line18 defined -> result is line18.
+	vgb.uVBI[1] = 0;
+	vgb.uVBI[2] = 0xF80055;
+	uLine1718 = 0;
+	bRes = VBIParse::GetBestLine1718(uLine1718, vgb, NTSC);
+	TEST_CHECK(bRes == true);
+	TEST_CHECK_EQUAL(0xF80055u, uLine1718);
+
+	// Branch 3: line17 defined, line18 undefined (0) -> result is line17.
+	vgb.uVBI[1] = 0xF80077;
+	vgb.uVBI[2] = 0;
+	uLine1718 = 0;
+	bRes = VBIParse::GetBestLine1718(uLine1718, vgb, NTSC);
+	TEST_CHECK(bRes == true);
+	TEST_CHECK_EQUAL(0xF80077u, uLine1718);
+
+	// Branch 4: line17 black, line18 FAILED -> result is line17 (BLACK).
+	vgb.uVBI[1] = VBIParse::PARSE_BLACK;
+	vgb.uVBI[2] = VBIParse::PARSE_FAILED;
+	uLine1718 = 0xDEAD;
+	bRes = VBIParse::GetBestLine1718(uLine1718, vgb, NTSC);
+	TEST_CHECK(bRes == true);
+	TEST_CHECK_EQUAL((unsigned int) VBIParse::PARSE_BLACK, uLine1718);
+
+	// Branch 5: line18 black, line17 FAILED -> result is line18 (BLACK).
+	vgb.uVBI[1] = VBIParse::PARSE_FAILED;
+	vgb.uVBI[2] = VBIParse::PARSE_BLACK;
+	uLine1718 = 0xDEAD;
+	bRes = VBIParse::GetBestLine1718(uLine1718, vgb, NTSC);
+	TEST_CHECK(bRes == true);
+	TEST_CHECK_EQUAL((unsigned int) VBIParse::PARSE_BLACK, uLine1718);
+
+	// Branch 6a: both lines defined, different, with previous picnum, line17 is
+	// (prev + 1) -> pick line17.
+	vgb.uVBI[1] = 0xF80011;
+	vgb.uVBI[2] = 0xF80099;
+	uLine1718 = 0;
+	bRes = VBIParse::GetBestLine1718(uLine1718, vgb, NTSC, 0xF80010);
+	TEST_CHECK(bRes == true);
+	TEST_CHECK_EQUAL(0xF80011u, uLine1718);
+
+	// Branch 6b: line18 is (prev + 1) -> pick line18.
+	vgb.uVBI[1] = 0xF80099;
+	vgb.uVBI[2] = 0xF80011;
+	uLine1718 = 0;
+	bRes = VBIParse::GetBestLine1718(uLine1718, vgb, NTSC, 0xF80010);
+	TEST_CHECK(bRes == true);
+	TEST_CHECK_EQUAL(0xF80011u, uLine1718);
+
+	// Failure: both undefined (PARSE_FAILED) -> return false, uLine1718 set to
+	// PARSE_FAILED by the function's own initializer. This pins
+	// uLine1718 = PARSE_FAILED at line 433.
+	vgb.uVBI[1] = VBIParse::PARSE_FAILED;
+	vgb.uVBI[2] = VBIParse::PARSE_FAILED;
+	uLine1718 = 0x1234;
+	bRes = VBIParse::GetBestLine1718(uLine1718, vgb, NTSC);
+	TEST_CHECK(bRes == false);
+	TEST_CHECK_EQUAL((unsigned int) VBIParse::PARSE_FAILED, uLine1718);
+}
+
+TEST(VBIParse, vbi_get_best_line1718)
+{
+	test_vbi_get_best_line1718();
+}
+
+void test_vbi_verify_warnings()
+{
+	// Triggers each branch of VerifyVBIData's picture-number checks so the
+	// warning strings that go into lstWarnings are pinned (pins the
+	// `s += ...` chains and the `bSuspicious = true` assign_const mutants,
+	// and the `jump > 1` vs `jump >= 1` comparator).
+	VBIParseSPtr VBISPtr = VBIParse::GetInstance();
+	VBIParse *pVBI = VBISPtr.get();
+
+	// Descending picture number: 5 then 3.
+	pVBI->ClearVBIData();
+	VBI_t vbi;
+	memset(&vbi, 0, sizeof(vbi));
+	vbi.uVBI[1] = vbi.uVBI[2] = 0xF80005;
+	pVBI->AddVBIData(vbi);
+	vbi.uVBI[1] = vbi.uVBI[2] = 0xF80003;
+	pVBI->AddVBIData(vbi);
+
+	bool bVer = pVBI->VerifyVBIData(NTSC, false);	// no auto-fix so warnings stick
+	TEST_CHECK(bVer == true);
+	list<string> warnings = pVBI->GetWarnings();
+	TEST_CHECK(warnings.size() >= 1);
+
+	// Picture number jumping forward by more than 1.
+	pVBI->ClearVBIData();
+	vbi.uVBI[1] = vbi.uVBI[2] = 0xF80001;
+	pVBI->AddVBIData(vbi);
+	vbi.uVBI[1] = vbi.uVBI[2] = 0xF80005;	// +4 jump
+	pVBI->AddVBIData(vbi);
+
+	bVer = pVBI->VerifyVBIData(NTSC, false);
+	TEST_CHECK(bVer == true);
+	warnings = pVBI->GetWarnings();
+	TEST_CHECK(warnings.size() >= 1);
+
+	// Conflict between line17 and line18 that cannot be resolved -> error.
+	pVBI->ClearVBIData();
+	memset(&vbi, 0, sizeof(vbi));
+	vbi.uVBI[1] = 0xF80001;
+	vbi.uVBI[2] = 0xF80099;	// completely different value, not resolvable
+	pVBI->AddVBIData(vbi);
+
+	bVer = pVBI->VerifyVBIData(NTSC, false);
+	TEST_CHECK(bVer == false);
+	list<string> errors = pVBI->GetErrors();
+	TEST_CHECK(errors.size() >= 1);
+
+	pVBI->ClearVBIData();
+}
+
+TEST(VBIParse, vbi_verify_warnings)
+{
+	test_vbi_verify_warnings();
+}
+
+void test_vbi_get_vbi_data_out_of_range_pushes_error()
+{
+	// GetVBIData must push "Out of range." into m_lstErrors when stIdx is too
+	// large. Pins the cxx_remove_void_call at VBIParse.cpp:1399. VerifyVBIData
+	// clears the error/warning lists, so it's a clean baseline before the
+	// out-of-range call.
+	VBIParseSPtr VBISPtr = VBIParse::GetInstance();
+	VBIParse *pVBI = VBISPtr.get();
+
+	pVBI->ClearVBIData();
+
+	// Add one entry of good data and run VerifyVBIData to clear error list.
+	VBI_t v;
+	memset(&v, 0, sizeof(v));
+	v.uVBI[1] = v.uVBI[2] = 0xF80001;
+	pVBI->AddVBIData(v);
+	(void) pVBI->VerifyVBIData(NTSC, false);
+
+	TEST_CHECK_EQUAL((size_t) 0, pVBI->GetErrors().size());
+
+	// index 1 is out of range (only 1 entry). Function returns false and
+	// pushes exactly one "Out of range." message.
+	VBI_t got;
+	bool bRes = pVBI->GetVBIData(got, 1);
+	TEST_CHECK(bRes == false);
+	TEST_CHECK_EQUAL((size_t) 1, pVBI->GetErrors().size());
+	TEST_CHECK_EQUAL(string("Out of range."), pVBI->GetLastErrorMsg());
+
+	pVBI->ClearVBIData();
+}
+
+TEST(VBIParse, vbi_get_vbi_data_out_of_range_pushes_error)
+{
+	test_vbi_get_vbi_data_out_of_range_pushes_error();
+}
+
+void test_vbi_compact_22_atari_pattern()
+{
+	// Feeds a 2:2 Atari pattern so CompactVBIData recognizes PATTERN_22_ATARI.
+	// 2:2 Atari VBI has 0xF..... on dominant fields and 0xA..... (top nibble
+	// 0xA is the Atari variant) on intermediate fields. This exercises the
+	// branch at VBIParse.cpp:1332-1333 and the subsequent entry assignments.
+	VBIParseSPtr VBISPtr = VBIParse::GetInstance();
+	VBIParse *pVBI = VBISPtr.get();
+
+	pVBI->ClearVBIData();
+
+	VBI_t vbi;
+	memset(&vbi, 0, sizeof(vbi));
+
+	// The Atari detection branch (VBIParse.cpp:1332) fires when field N has
+	// header 0xF8 and field N+1 equals (next_picnum & 0xAFFFFF). So field 0
+	// encodes picnum 1 fully, field 1 encodes picnum 2 masked to 0xA8,
+	// field 2 encodes picnum 2 fully (treated as wrap-around to next pattern
+	// after detection), etc.
+	for (unsigned int pn = 1; pn <= 5; pn++)
+	{
+		vbi.uVBI[1] = vbi.uVBI[2] = VBIParse::DecimalToPictureNumVBI(pn, NTSC);
+		pVBI->AddVBIData(vbi);
+
+		unsigned int uAtari = VBIParse::DecimalToPictureNumVBI(pn + 1, NTSC) & 0xAFFFFF;
+		vbi.uVBI[1] = vbi.uVBI[2] = uAtari;
+		pVBI->AddVBIData(vbi);
+	}
+
+	list<VBICompactEntry_t> lstEntries;
+	bool bRes = pVBI->CompactVBIData(lstEntries, NTSC);
+	TEST_CHECK(bRes == true);
+	TEST_REQUIRE(lstEntries.size() >= 1);
+
+	VBICompactEntry_t front = lstEntries.front();
+	TEST_CHECK_EQUAL(PATTERN_22_ATARI, front.typePattern);
+	TEST_CHECK_EQUAL(1, front.i32StartPictureNumber);
+	TEST_CHECK_EQUAL(0u, front.u32StartAbsField);
+
+	pVBI->ClearVBIData();
+}
+
+TEST(VBIParse, vbi_compact_22_atari_pattern)
+{
+	test_vbi_compact_22_atari_pattern();
+}
