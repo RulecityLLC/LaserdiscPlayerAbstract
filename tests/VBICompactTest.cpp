@@ -2847,6 +2847,101 @@ TEST(VBICompact, vbic_seek_fail_paths)
 	test_vbic_seek_fail_paths();
 }
 
+void test_vbic_seek_entry_count_honored()
+{
+	// Allocate 2 entries in storage but set uEntryCount=1 so the scan loop at
+	// VBICompact.c:153 (`i < uEntryCount`) must stop after the first entry.
+	// If the mutation flips `<` to `<=`, the loop peeks at entries[1] and picks
+	// the WRONG entry, producing a different final field.
+	VBICompactEntry_t entries[2];
+	entries[0].u32StartAbsField = 0;
+	entries[0].i32StartPictureNumber = 1;
+	entries[0].typePattern = PATTERN_22;
+	entries[0].u16Special = 0;
+	entries[0].u8PatternOffset = 0;
+
+	entries[1].u32StartAbsField = 50;
+	entries[1].i32StartPictureNumber = 5;	// < sought frame, so mutation continues past
+	entries[1].typePattern = PATTERN_22;
+	entries[1].u16Special = 0;
+	entries[1].u8PatternOffset = 0;
+
+	VBICompact_t compact;
+	compact.uEntryCount = 1;		// only first entry is valid
+	compact.pEntries = entries;
+	compact.uTotalFields = 100;
+
+	VBIC_Init(&compact);
+	VBIC_SeekResult r = VBIC_SEEK(10);
+	TEST_CHECK_EQUAL(VBIC_SEEK_SUCCESS, r);
+	// With original loop: pEntry=entries[0], uFieldDiff=18 -> uFinalField=18.
+	// With mutant `<=`: pEntry=entries[1], uFieldDiff=10 -> uFinalField=60.
+	TEST_CHECK_EQUAL(18u, VBIC_GetCurAbsField());
+}
+
+TEST(VBICompact, vbic_seek_entry_count_honored)
+{
+	test_vbic_seek_entry_count_honored();
+}
+
+void test_vbic_seek_clamping_default_fail()
+{
+	// Builds a malformed compact where PATTERN_PICNUM's u32StartAbsField exceeds
+	// uMaxFieldIdx. That triggers the "uFinalField > uMaxFieldIdx" clamp path
+	// at VBICompact.c:301, whose inner switch's default case sets
+	// res = VBIC_SEEK_FAIL at line 343.
+	VBICompactEntry_t entry[1];
+	entry[0].u32StartAbsField = 20;	// > uMaxFieldIdx(9) below
+	entry[0].i32StartPictureNumber = 5;
+	entry[0].typePattern = PATTERN_PICNUM;
+	entry[0].u16Special = 0;
+	entry[0].u8PatternOffset = 0;
+
+	VBICompact_t c;
+	c.uEntryCount = 1;
+	c.pEntries = entry;
+	c.uTotalFields = 10;
+
+	VBIC_Init(&c);
+	VBIC_SeekResult r = VBIC_SEEK(5);
+	TEST_CHECK_EQUAL(VBIC_SEEK_FAIL, r);
+}
+
+TEST(VBICompact, vbic_seek_clamping_default_fail)
+{
+	test_vbic_seek_clamping_default_fail();
+}
+
+void test_vbic_tobuffer_max_entries()
+{
+	// 255 entries is the max VBIC_ToBuffer supports (uAdjustedEntryCount <= 255).
+	// Pins the `<= 255` boundary at VBICompact.c:548 (a `< 255` variant would
+	// reject a 255-entry compact).
+	static VBICompactEntry_t e[255];
+	for (unsigned int i = 0; i < 255; i++)
+	{
+		e[i].u32StartAbsField = i * 4;
+		e[i].i32StartPictureNumber = i + 1;
+		e[i].typePattern = PATTERN_22;
+		e[i].u16Special = 0;
+		e[i].u8PatternOffset = 0;
+	}
+
+	VBICompact_t c;
+	c.uEntryCount = 255;
+	c.pEntries = e;
+	c.uTotalFields = 255 * 4;
+
+	unsigned char buf[6 + 255 * 12];
+	size_t stRes = VBIC_ToBuffer(buf, sizeof(buf), &c);
+	TEST_CHECK_EQUAL((size_t) sizeof(buf), stRes);
+}
+
+TEST(VBICompact, vbic_tobuffer_max_entries)
+{
+	test_vbic_tobuffer_max_entries();
+}
+
 void test_vbic_line18_zeroes_and_leadin_leadout()
 {
 	// Builds an entry with PATTERN_ZEROES and verifies VBIC_GetCurFieldLine18

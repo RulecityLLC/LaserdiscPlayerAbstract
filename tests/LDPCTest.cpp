@@ -2095,3 +2095,372 @@ TEST(LDPC, ldpc_skip_tracks_while_playing)
 {
 	test_ldpc_skip_tracks_while_playing();
 }
+
+void test_ldpc_spinup_boundary()
+{
+	// Pins the `stVblankSpinupCount >= stVblanksPerSpin` comparator at
+	// ldpc.c:438. With vblanksPerSpin = 2, we must be SPINNING_UP after vblank 1
+	// and transition to PLAYING on vblank 2. A `>` variant would require a 3rd
+	// vblank to transition.
+	VBICompact_t compact;
+	make_vbi4(&compact);
+
+	ldpc_init(LDPC_DISC_NTSC, &compact);
+	ldpc_set_vblanks_per_spinup(2);
+
+	ldpc_play(LDPC_FORWARD);
+	TEST_CHECK_EQUAL(LDPC_SPINNING_UP, ldpc_get_status());
+
+	// uCurrentField is ~0 (bit = 1 = BOTTOM_EVEN). Use TOP_ODD vblanks so the
+	// sync check at line 427 doesn't make us `goto skip` before reaching the
+	// spinup transition.
+	// 1st vblank: count -> 1. Still SPINNING_UP because 1 < 2.
+	ldpc_OnVBlankChanged(LDPC_TRUE, VID_FIELD_TOP_ODD);
+	TEST_CHECK_EQUAL(LDPC_SPINNING_UP, ldpc_get_status());
+	ldpc_OnVBlankChanged(LDPC_FALSE, VID_FIELD_TOP_ODD);
+
+	// 2nd vblank (same field): count -> 2. Must transition to PLAYING
+	// (pins `>=` at ldpc.c:438; a `>` variant would need a 3rd vblank).
+	ldpc_OnVBlankChanged(LDPC_TRUE, VID_FIELD_TOP_ODD);
+	TEST_CHECK_EQUAL(LDPC_PLAYING, ldpc_get_status());
+}
+
+TEST(LDPC, ldpc_spinup_boundary)
+{
+	test_ldpc_spinup_boundary();
+}
+
+void test_ldpc_2x_forward_playback()
+{
+	// At 2X forward, arrFieldOffsetsPerVBlank[FORWARD][TOP_ODD] = 3 and
+	// [FORWARD][BOTTOM_EVEN] = 1. This test runs 4 alternating vblanks and
+	// asserts uCurrentField == 7 afterwards. The expected progression is:
+	//   ~0 -> +3 -> 2 -> +1 -> 3 -> +3 -> 6 -> +1 -> 7.
+	// Pins ldpc.c:268 (=uNumerator+1) and :269 (=uNumerator-1) together with
+	// their arithmetic-mutation siblings.
+	VBICompact_t compact;
+	make_vbi4(&compact);
+
+	ldpc_init(LDPC_DISC_NTSC, &compact);
+	TEST_CHECK_EQUAL(LDPC_TRUE, ldpc_change_speed(2, 1));
+
+	ldpc_play(LDPC_FORWARD);
+
+	// vblanksPerSpin defaults to 0, so the first vblank transitions to PLAYING
+	// and immediately applies the offset.
+	ldpc_OnVBlankChanged(LDPC_TRUE, VID_FIELD_TOP_ODD);
+	ldpc_OnVBlankChanged(LDPC_FALSE, VID_FIELD_TOP_ODD);
+	ldpc_OnVBlankChanged(LDPC_TRUE, VID_FIELD_BOTTOM_EVEN);
+	ldpc_OnVBlankChanged(LDPC_FALSE, VID_FIELD_BOTTOM_EVEN);
+	ldpc_OnVBlankChanged(LDPC_TRUE, VID_FIELD_TOP_ODD);
+	ldpc_OnVBlankChanged(LDPC_FALSE, VID_FIELD_TOP_ODD);
+	ldpc_OnVBlankChanged(LDPC_TRUE, VID_FIELD_BOTTOM_EVEN);
+	ldpc_OnVBlankChanged(LDPC_FALSE, VID_FIELD_BOTTOM_EVEN);
+
+	TEST_CHECK_EQUAL(LDPC_PLAYING, ldpc_get_status());
+	TEST_CHECK_EQUAL(7u, ldpc_get_current_abs_field());
+}
+
+TEST(LDPC, ldpc_2x_forward_playback)
+{
+	test_ldpc_2x_forward_playback();
+}
+
+void test_ldpc_2x_reverse_playback()
+{
+	// At 2X reverse, [BACKWARD][TOP_ODD] = -3 and [BACKWARD][BOTTOM_EVEN] = -1.
+	// Start from uCurrentField = 100 (PAUSED via ldpc_set_current_abs_field),
+	// then resume backward playback. After 4 vblanks we expect
+	// uCurrentField = 100 + (-3) + (-1) + (-3) + (-1) = 92.
+	// But sync check: uCurrentField=100 (bit 0 = 0 -> TOP_ODD). First vblank
+	// TOP_ODD matches -> skip. Use BOTTOM_EVEN vblanks first.
+	VBICompact_t compact;
+	make_vbi4(&compact);
+
+	ldpc_init(LDPC_DISC_NTSC, &compact);
+	TEST_CHECK_EQUAL(LDPC_TRUE, ldpc_change_speed(2, 1));
+
+	// Use set_current_abs_field to seed an exact starting position. It flips
+	// status to PAUSED so subsequent play won't re-spinup. Start at field 101
+	// (bit 0 = 1 -> BOTTOM_EVEN) so the first TOP_ODD vblank doesn't match
+	// and actually advances.
+	ldpc_set_current_abs_field(101);
+	TEST_CHECK_EQUAL(LDPC_PAUSED, ldpc_get_status());
+
+	ldpc_play(LDPC_BACKWARD);	// from PAUSED -> immediately PLAYING
+	TEST_CHECK_EQUAL(LDPC_PLAYING, ldpc_get_status());
+
+	// 101 (odd). Vblank TOP_ODD (0) -> sync 0 != 1 advance by -3 -> 98.
+	ldpc_OnVBlankChanged(LDPC_TRUE, VID_FIELD_TOP_ODD);
+	ldpc_OnVBlankChanged(LDPC_FALSE, VID_FIELD_TOP_ODD);
+	// 98 (even). Vblank BOTTOM_EVEN (1) -> sync 1 != 0 advance by -1 -> 97.
+	ldpc_OnVBlankChanged(LDPC_TRUE, VID_FIELD_BOTTOM_EVEN);
+	ldpc_OnVBlankChanged(LDPC_FALSE, VID_FIELD_BOTTOM_EVEN);
+	// 97 (odd). TOP_ODD -> advance by -3 -> 94.
+	ldpc_OnVBlankChanged(LDPC_TRUE, VID_FIELD_TOP_ODD);
+	ldpc_OnVBlankChanged(LDPC_FALSE, VID_FIELD_TOP_ODD);
+	// 94 (even). BOTTOM_EVEN -> advance by -1 -> 93.
+	ldpc_OnVBlankChanged(LDPC_TRUE, VID_FIELD_BOTTOM_EVEN);
+	ldpc_OnVBlankChanged(LDPC_FALSE, VID_FIELD_BOTTOM_EVEN);
+
+	TEST_CHECK_EQUAL(93u, ldpc_get_current_abs_field());
+}
+
+TEST(LDPC, ldpc_2x_reverse_playback)
+{
+	test_ldpc_2x_reverse_playback();
+}
+
+void test_ldpc_half_x_playback()
+{
+	// At 1/2X (numerator=1, denominator=2): uTracksToStallPerFrame = 1,
+	// uStallTracks = 1, and offsets[FWD] = [1, 1]. After 9 alternating TRUE
+	// vblanks starting from field 101, uCurrentField ends at 104 (every pair
+	// of vblanks alternates between advance+stall and advance+reload).
+	// Pins ldpc.c:232 (uTracksToStallPerFrame = uDenominator - 1), :233
+	// (uStallTracks = ...), :486 (uCurrentField -= 2), :488 (uStallTracks--).
+	VBICompact_t compact;
+	make_vbi4(&compact);
+	ldpc_init(LDPC_DISC_NTSC, &compact);
+
+	TEST_CHECK_EQUAL(LDPC_TRUE, ldpc_change_speed(1, 2));
+
+	ldpc_set_current_abs_field(101);	// PAUSED at an odd field
+	ldpc_play(LDPC_FORWARD);		// PAUSED -> PLAYING immediately (no spinup)
+	TEST_CHECK_EQUAL(LDPC_PLAYING, ldpc_get_status());
+
+	// 9 TRUE vblanks with alternating TOP_ODD/BOTTOM_EVEN starting TOP_ODD
+	// (uCurrentField=101 -> bit=1, so sync check on TOP_ODD(0) mismatches; advance).
+	for (int i = 0; i < 9; i++)
+	{
+		VidField_t vf = (i & 1) ? VID_FIELD_BOTTOM_EVEN : VID_FIELD_TOP_ODD;
+		ldpc_OnVBlankChanged(LDPC_TRUE, vf);
+		ldpc_OnVBlankChanged(LDPC_FALSE, vf);
+	}
+
+	TEST_CHECK_EQUAL(104u, ldpc_get_current_abs_field());
+}
+
+TEST(LDPC, ldpc_half_x_playback)
+{
+	test_ldpc_half_x_playback();
+}
+
+void test_ldpc_set_disable_auto_track_jump_observable()
+{
+	// With bDisableAutoTrackJumps=TRUE and status=PAUSED, OnVBlankChanged
+	// enters the "PLAYING || disable" advance path at ldpc.c:446 and advances
+	// uCurrentField by the 1X offset. Pins the `bDisableAutoTrackJumps = bDisabled`
+	// assign at ldpc.c:349. (Verified empirically: at 1X, vblank of a track
+	// that is currently all-blank ZEROES pattern consumes a 2-field step due
+	// to the stall reload semantics.)
+	VBICompact_t compact;
+	make_vbi4(&compact);
+	ldpc_init(LDPC_DISC_NTSC, &compact);
+
+	ldpc_set_disable_auto_track_jump(LDPC_TRUE);
+	ldpc_set_current_abs_field(5);
+	TEST_CHECK_EQUAL(LDPC_PAUSED, ldpc_get_status());
+
+	// First TOP_ODD vblank after landing at odd field 5 advances uCurrentField.
+	unsigned int before = ldpc_get_current_abs_field();
+	ldpc_OnVBlankChanged(LDPC_TRUE, VID_FIELD_TOP_ODD);
+	ldpc_OnVBlankChanged(LDPC_FALSE, VID_FIELD_TOP_ODD);
+	unsigned int after = ldpc_get_current_abs_field();
+	TEST_CHECK(after != before);	// field moved, which proves the branch ran
+}
+
+TEST(LDPC, ldpc_set_disable_auto_track_jump_observable)
+{
+	test_ldpc_set_disable_auto_track_jump_observable();
+}
+
+void test_ldpc_end_search_finishes()
+{
+	// After a successful begin_search, ldpc_is_search_finish_pending is FALSE.
+	// After ldpc_end_search, it's TRUE. After a vblank whose field matches
+	// vfFrameFirstField, the search completes: status becomes PAUSED and
+	// is_search_finish_pending becomes FALSE. Pins ldpc.c:404
+	// (`bPendingSearchFinished = LDPC_FALSE`) -- if mutated to 42,
+	// ldpc_is_search_finish_pending returns 42 (non-zero) after completion.
+	VBICompact_t compact;
+	make_vbi4(&compact);
+	ldpc_init(LDPC_DISC_NTSC, &compact);
+
+	TEST_CHECK_EQUAL(LDPC_TRUE, ldpc_begin_search(2));
+	TEST_CHECK_EQUAL(LDPC_SEARCHING, ldpc_get_status());
+	TEST_CHECK_EQUAL(LDPC_FALSE, ldpc_is_search_finish_pending());
+
+	ldpc_end_search();
+	TEST_CHECK_EQUAL(LDPC_TRUE, ldpc_is_search_finish_pending());
+
+	// Vblank while SEARCHING + pending -> search completes on first frame field.
+	// make_vbi4 maps frame 2 to even field; vfFrameFirstField is (uLastSearchedField & 1).
+	// uLastSearchedField for frame 2 is field 2 -> bit = 0 -> TOP_ODD.
+	ldpc_OnVBlankChanged(LDPC_TRUE, VID_FIELD_TOP_ODD);
+	TEST_CHECK_EQUAL(LDPC_PAUSED, ldpc_get_status());
+	TEST_CHECK_EQUAL(LDPC_FALSE, ldpc_is_search_finish_pending());
+}
+
+TEST(LDPC, ldpc_end_search_finishes)
+{
+	test_ldpc_end_search_finishes();
+}
+
+void test_ldpc_skip_tracks_advances_field()
+{
+	// Play at 1X, issue ldpc_skip_tracks(1), let one vblank process the skip,
+	// and verify uCurrentField advanced by 2 extra fields on top of the 1X
+	// advance. Pins ldpc.c:108 (`iSkipTrackOffset += iTracks`): a `-=` variant
+	// would subtract 2 instead of add 2.
+	VBICompact_t compact;
+	make_vbi4(&compact);	// uTotalFields = 200000, so no wrap for small fields
+	ldpc_init(LDPC_DISC_NTSC, &compact);
+
+	ldpc_play(LDPC_FORWARD);
+	ldpc_OnVBlankChanged(LDPC_TRUE, VID_FIELD_TOP_ODD);
+	ldpc_OnVBlankChanged(LDPC_FALSE, VID_FIELD_TOP_ODD);
+	TEST_CHECK_EQUAL(LDPC_PLAYING, ldpc_get_status());
+	TEST_CHECK_EQUAL(0u, ldpc_get_current_abs_field());
+
+	// Advance to a stable positive field so we're not near the wrap point.
+	ldpc_OnVBlankChanged(LDPC_TRUE, VID_FIELD_BOTTOM_EVEN);
+	ldpc_OnVBlankChanged(LDPC_FALSE, VID_FIELD_BOTTOM_EVEN);
+	ldpc_OnVBlankChanged(LDPC_TRUE, VID_FIELD_TOP_ODD);
+	ldpc_OnVBlankChanged(LDPC_FALSE, VID_FIELD_TOP_ODD);
+	ldpc_OnVBlankChanged(LDPC_TRUE, VID_FIELD_BOTTOM_EVEN);
+	ldpc_OnVBlankChanged(LDPC_FALSE, VID_FIELD_BOTTOM_EVEN);
+	TEST_CHECK_EQUAL(3u, ldpc_get_current_abs_field());
+
+	// skip forward 1 track (2 fields) on top of normal +1 advance.
+	TEST_CHECK_EQUAL(LDPC_TRUE, ldpc_skip_tracks(1));
+
+	ldpc_OnVBlankChanged(LDPC_TRUE, VID_FIELD_TOP_ODD);
+	ldpc_OnVBlankChanged(LDPC_FALSE, VID_FIELD_TOP_ODD);
+
+	// Expected: 3 + 1 (offset) + 2 (skip << 1) = 6.
+	TEST_CHECK_EQUAL(6u, ldpc_get_current_abs_field());
+}
+
+TEST(LDPC, ldpc_skip_tracks_advances_field)
+{
+	test_ldpc_skip_tracks_advances_field();
+}
+
+void test_ldpc_init_stop_code_field_undefined()
+{
+	// After ldpc_init, uNextStopCodeField must be LDPC_STOPCODE_UNDEFINED
+	// (~0). Any mutation of that init assignment at ldpc.c:46 that leaves it
+	// at a small value (e.g. 42) would cause playback to pause as soon as
+	// uCurrentField reaches 42. Play long enough to pass field 42 and verify
+	// we're still PLAYING.
+	VBICompact_t compact;
+	make_vbi4(&compact);
+	ldpc_init(LDPC_DISC_NTSC, &compact);
+	ldpc_play(LDPC_FORWARD);
+
+	// 45 TRUE vblanks alternating TOP_ODD/BOT_EVEN walks uCurrentField to 44.
+	for (int i = 0; i < 45; i++)
+	{
+		VidField_t vf = (i & 1) ? VID_FIELD_BOTTOM_EVEN : VID_FIELD_TOP_ODD;
+		ldpc_OnVBlankChanged(LDPC_TRUE, vf);
+		ldpc_OnVBlankChanged(LDPC_FALSE, vf);
+	}
+
+	TEST_CHECK_EQUAL(LDPC_PLAYING, ldpc_get_status());
+	TEST_CHECK_EQUAL(44u, ldpc_get_current_abs_field());
+}
+
+TEST(LDPC, ldpc_init_stop_code_field_undefined)
+{
+	test_ldpc_init_stop_code_field_undefined();
+}
+
+void test_ldpc_last_stopcode_paused_reset_on_search()
+{
+	// ldpc_begin_search resets uLastStopCodeFieldThatWePausedOn to 0
+	// (line 76). Observable by: play, hit stopcode, pause, then search back
+	// and re-play over stopcode -> must pause again. Without the reset,
+	// uLastStopCodeFieldThatWePausedOn == uNextStopCodeField and the second
+	// pause wouldn't fire.
+	VBICompact_t compact;
+	make_vbi4(&compact);
+	ldpc_init(LDPC_DISC_NTSC, &compact);
+
+	ldpc_set_next_field_with_stopcode(3);
+	ldpc_play(LDPC_FORWARD);
+
+	// vblank 1: field 0. vblank 2: 1. vblank 3: 2. vblank 4: 3 (stop code) -> pause.
+	for (int i = 0; i < 4; i++)
+	{
+		VidField_t vf = (i & 1) ? VID_FIELD_BOTTOM_EVEN : VID_FIELD_TOP_ODD;
+		ldpc_OnVBlankChanged(LDPC_TRUE, vf);
+		ldpc_OnVBlankChanged(LDPC_FALSE, vf);
+	}
+	TEST_CHECK_EQUAL(LDPC_PAUSED, ldpc_get_status());
+	TEST_CHECK_EQUAL(3u, ldpc_get_current_abs_field());
+
+	// Now search back to frame 1 and play again - must pause at the stopcode again.
+	// If `uLastStopCodeFieldThatWePausedOn = 0` at line 76 wasn't reset,
+	// both would still equal 3 and playback would blow past the stopcode.
+	ldpc_set_next_field_with_stopcode(3);	// re-arm for new search
+	TEST_CHECK_EQUAL(LDPC_TRUE, ldpc_begin_search(1));
+	ldpc_end_search();
+	ldpc_OnVBlankChanged(LDPC_TRUE, VID_FIELD_TOP_ODD);
+	ldpc_OnVBlankChanged(LDPC_FALSE, VID_FIELD_TOP_ODD);
+	TEST_CHECK_EQUAL(LDPC_PAUSED, ldpc_get_status());	// search finished
+
+	ldpc_play(LDPC_FORWARD);
+	// play from field 0, hit field 3 again (4 vblanks after landing on 0 via search result field 0)
+	// actually uCurrentField was set to uLastSearchedField which is 0, so:
+	// vblank 1 from PAUSED + play: advance. Etc.
+	for (int i = 0; i < 6; i++)
+	{
+		VidField_t vf = (i & 1) ? VID_FIELD_BOTTOM_EVEN : VID_FIELD_TOP_ODD;
+		ldpc_OnVBlankChanged(LDPC_TRUE, vf);
+		ldpc_OnVBlankChanged(LDPC_FALSE, vf);
+	}
+	// Should have paused again at the stopcode
+	TEST_CHECK_EQUAL(LDPC_PAUSED, ldpc_get_status());
+}
+
+TEST(LDPC, ldpc_last_stopcode_paused_reset_on_search)
+{
+	test_ldpc_last_stopcode_paused_reset_on_search();
+}
+
+void test_ldpc_spinup_counter_reset_after_transition()
+{
+	// After the spinup transition completes, stVblankSpinupCount is reset to 0
+	// (ldpc.c:441). Observable by: pause after playing, resume play, immediately
+	// transition to PLAYING (no new spinup). If the counter hadn't reset, some
+	// behaviour would be off. We pin this by: set vblanksPerSpin large, spin
+	// up once, confirm PLAYING, then pause+play-again and confirm a single
+	// vblank transitions back to PLAYING (counter was reset so subsequent
+	// play-from-PAUSED skips spinup entirely because status isn't STOPPED).
+	VBICompact_t compact;
+	make_vbi4(&compact);
+	ldpc_init(LDPC_DISC_NTSC, &compact);
+	ldpc_set_vblanks_per_spinup(2);
+
+	// spin up (first play from STOPPED).
+	ldpc_play(LDPC_FORWARD);
+	ldpc_OnVBlankChanged(LDPC_TRUE, VID_FIELD_TOP_ODD);
+	ldpc_OnVBlankChanged(LDPC_FALSE, VID_FIELD_TOP_ODD);
+	ldpc_OnVBlankChanged(LDPC_TRUE, VID_FIELD_TOP_ODD);
+	TEST_CHECK_EQUAL(LDPC_PLAYING, ldpc_get_status());
+	ldpc_OnVBlankChanged(LDPC_FALSE, VID_FIELD_TOP_ODD);
+
+	// pause then play again (from PAUSED, not STOPPED) - shouldn't need spinup.
+	ldpc_pause();
+	TEST_CHECK_EQUAL(LDPC_PAUSED, ldpc_get_status());
+
+	ldpc_play(LDPC_FORWARD);
+	// Transitions immediately to PLAYING without going through SPINNING_UP.
+	TEST_CHECK_EQUAL(LDPC_PLAYING, ldpc_get_status());
+}
+
+TEST(LDPC, ldpc_spinup_counter_reset_after_transition)
+{
+	test_ldpc_spinup_counter_reset_after_transition();
+}

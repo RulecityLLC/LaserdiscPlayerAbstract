@@ -829,3 +829,700 @@ TEST(VBIParse, vbi_compact_22_atari_pattern)
 {
 	test_vbi_compact_22_atari_pattern();
 }
+
+static void addPicNum(VBIParse *pVBI, unsigned int uVBI)
+{
+	VBI_t v;
+	memset(&v, 0, sizeof(v));
+	v.uVBI[1] = v.uVBI[2] = uVBI;
+	pVBI->AddVBIData(v);
+}
+
+void test_vbi_verify_branches()
+{
+	// Exercises every surviving branch of VerifyVBIData's picture-number
+	// checker, plus the black+failed warning path, so that the boundary
+	// comparators (>, <, ==) and the `s += ...` chains can be pinned.
+	VBIParseSPtr VBISPtr = VBIParse::GetInstance();
+	VBIParse *pVBI = VBISPtr.get();
+
+	// 1. Clean ascending sequence with non-picnum spacer: no warnings.
+	pVBI->ClearVBIData();
+	addPicNum(pVBI, 0xF80001);
+	addPicNum(pVBI, 0);
+	addPicNum(pVBI, 0xF80002);
+	TEST_CHECK(pVBI->VerifyVBIData(NTSC, false));
+	TEST_CHECK_EQUAL((size_t) 0, pVBI->GetWarnings().size());
+
+	// 2. Same picnum reappears after a non-picnum: expect 0 warnings. Pins
+	//    the `uCurPicNum > uLastPicNum` and `uCurPicNum < uLastPicNum` boundaries.
+	pVBI->ClearVBIData();
+	addPicNum(pVBI, 0xF80001);
+	addPicNum(pVBI, 0);
+	addPicNum(pVBI, 0xF80001);
+	TEST_CHECK(pVBI->VerifyVBIData(NTSC, false));
+	TEST_CHECK_EQUAL((size_t) 0, pVBI->GetWarnings().size());
+
+	// 3. Back-to-back same picnum: expect 0 warnings. Pins the `> vs >=`
+	//    mutation at line 928 (the `>=` variant would enter the block and
+	//    fire a "too frequent" warning).
+	pVBI->ClearVBIData();
+	addPicNum(pVBI, 0xF80001);
+	addPicNum(pVBI, 0xF80001);
+	TEST_CHECK(pVBI->VerifyVBIData(NTSC, false));
+	TEST_CHECK_EQUAL((size_t) 0, pVBI->GetWarnings().size());
+
+	// 4. Jump forward by 2 with one spacer: "jumps" warning. Pins the
+	//    `diff > 1` boundary and the sub_to_add mutation on diff.
+	pVBI->ClearVBIData();
+	addPicNum(pVBI, 0xF80001);
+	addPicNum(pVBI, 0);
+	addPicNum(pVBI, 0xF80003);
+	TEST_CHECK(pVBI->VerifyVBIData(NTSC, false));
+	TEST_CHECK_EQUAL((size_t) 1, pVBI->GetWarnings().size());
+
+	// 5. Two consecutive picnums (picnum 1 then picnum 2 directly): expect
+	//    "too frequent" warning. Pins the `uFieldsSincePicNum < 1` boundary.
+	pVBI->ClearVBIData();
+	addPicNum(pVBI, 0xF80001);
+	addPicNum(pVBI, 0xF80002);
+	TEST_CHECK(pVBI->VerifyVBIData(NTSC, false));
+	TEST_CHECK_EQUAL((size_t) 1, pVBI->GetWarnings().size());
+
+	// 6. Descending picnum: expect "less than" warning. Pins the `<` branch
+	//    and the `uCurPicNum < uLastPicNum` comparator.
+	pVBI->ClearVBIData();
+	addPicNum(pVBI, 0xF80005);
+	addPicNum(pVBI, 0);
+	addPicNum(pVBI, 0xF80003);
+	TEST_CHECK(pVBI->VerifyVBIData(NTSC, false));
+	TEST_CHECK_EQUAL((size_t) 1, pVBI->GetWarnings().size());
+
+	// 7. Black-line / failed-line combo: expect a "black line" warning.
+	//    Pins the `(uVBI17 == PARSE_BLACK) && (uVBI18 == PARSE_FAILED)`
+	//    predicate and the ||-partner.
+	pVBI->ClearVBIData();
+	{
+		VBI_t v;
+		memset(&v, 0, sizeof(v));
+		v.uVBI[1] = VBIParse::PARSE_BLACK;
+		v.uVBI[2] = VBIParse::PARSE_FAILED;
+		pVBI->AddVBIData(v);
+		(void) pVBI->VerifyVBIData(NTSC, false);
+	}
+	TEST_CHECK(pVBI->GetWarnings().size() >= 1);
+
+	// 8. Swapped variant: line18 black, line17 failed (pins the ||-partner
+	//    in the predicate).
+	pVBI->ClearVBIData();
+	{
+		VBI_t v;
+		memset(&v, 0, sizeof(v));
+		v.uVBI[1] = VBIParse::PARSE_FAILED;
+		v.uVBI[2] = VBIParse::PARSE_BLACK;
+		pVBI->AddVBIData(v);
+		(void) pVBI->VerifyVBIData(NTSC, false);
+	}
+	TEST_CHECK(pVBI->GetWarnings().size() >= 1);
+
+	pVBI->ClearVBIData();
+}
+
+TEST(VBIParse, vbi_verify_branches)
+{
+	test_vbi_verify_branches();
+}
+
+void test_vbi_is_white_flag()
+{
+	// Synthetic RGB line: a real white flag has ~5% leading black followed by
+	// ~95% white, so the long "high" width exceeds 75% of the line.
+	const unsigned int width = 100;
+	unsigned char line[width * 3];
+
+	// Case 1: 10 black + 80 white + 10 black -> 2 widths {10, 80}, 80/100 > 0.75 -> TRUE
+	memset(line, 0, sizeof(line));
+	for (unsigned int i = 10; i < 90; i++)
+	{
+		line[i*3 + 0] = 255;
+		line[i*3 + 1] = 255;
+		line[i*3 + 2] = 255;
+	}
+	TEST_CHECK(VBIParse::IsWhiteFlag(line, width) == true);
+
+	// Case 2: 10 black + 30 white + 60 black -> 2 widths {10, 30}, 30/100 < 0.75 -> FALSE
+	memset(line, 0, sizeof(line));
+	for (unsigned int i = 10; i < 40; i++)
+	{
+		line[i*3 + 0] = 255;
+		line[i*3 + 1] = 255;
+		line[i*3 + 2] = 255;
+	}
+	TEST_CHECK(VBIParse::IsWhiteFlag(line, width) == false);
+
+	// Case 3: all black -> high threshold is 0 or very low, GetHighLowWidths
+	// returns false -> IsWhiteFlag returns false.
+	memset(line, 0, sizeof(line));
+	TEST_CHECK(VBIParse::IsWhiteFlag(line, width) == false);
+
+	// Case 4: exactly 75% white (boundary). 10 black + 75 white + 15 black ->
+	// 75/100 = 0.75, not strictly greater than 0.75, so NOT a white flag.
+	// Pins the `> 0.75` comparator at line 213 (a `>=` variant would pass
+	// 0.75 >= 0.75 and return true).
+	memset(line, 0, sizeof(line));
+	for (unsigned int i = 10; i < 85; i++)
+	{
+		line[i*3 + 0] = 255;
+		line[i*3 + 1] = 255;
+		line[i*3 + 2] = 255;
+	}
+	TEST_CHECK(VBIParse::IsWhiteFlag(line, width) == false);
+}
+
+TEST(VBIParse, vbi_is_white_flag)
+{
+	test_vbi_is_white_flag();
+}
+
+void test_vbi_load_bad_version_pushes_error()
+{
+	// Pins the m_lstErrors.push_back("Unknown VBI version header.") call at
+	// VBIParse.cpp:760 (cxx_remove_void_call). Clear errors via Verify, then
+	// call LoadVBIData with a bad header and verify that exactly one new error
+	// appears with the expected text.
+	VBIParseSPtr VBISPtr = VBIParse::GetInstance();
+	VBIParse *pVBI = VBISPtr.get();
+
+	pVBI->ClearVBIData();
+	VBI_t v;
+	memset(&v, 0, sizeof(v));
+	v.uVBI[1] = v.uVBI[2] = 0xF80001;
+	pVBI->AddVBIData(v);
+	(void) pVBI->VerifyVBIData(NTSC, false);
+	TEST_CHECK_EQUAL((size_t) 0, pVBI->GetErrors().size());
+
+	unsigned char badHeader[14] = { 'X', 'V', 'B', 'I', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+	bool b = pVBI->LoadVBIData(badHeader, sizeof(badHeader));
+	TEST_CHECK(b == false);
+	TEST_CHECK_EQUAL((size_t) 1, pVBI->GetErrors().size());
+	TEST_CHECK_EQUAL(string("Unknown VBI version header."), pVBI->GetLastErrorMsg());
+
+	pVBI->ClearVBIData();
+}
+
+TEST(VBIParse, vbi_load_bad_version_pushes_error)
+{
+	test_vbi_load_bad_version_pushes_error();
+}
+
+void test_vbi_compact_lead_in_out_transitions()
+{
+	// Feed lead-in -> picnums -> lead-out so CompactVBIData produces three
+	// entries: LEADIN, 22, LEADOUT. This covers additional branches of the
+	// "seeking new pattern" switch at the end of CompactVBIData (lead-in
+	// detection at 0x88FFFF and lead-out at 0x80EEEE).
+	VBIParseSPtr VBISPtr = VBIParse::GetInstance();
+	VBIParse *pVBI = VBISPtr.get();
+
+	pVBI->ClearVBIData();
+
+	pVBI->AddVBIData(VBIParse::GenerateVBILeadIn());
+	pVBI->AddVBIData(VBIParse::GenerateVBILeadIn());
+
+	for (unsigned int pn = 1; pn <= 4; pn++)
+	{
+		pVBI->AddVBIData(VBIParse::GenerateVBIFrame(pn, NTSC));
+		pVBI->AddVBIData(VBIParse::GenerateVBIEmpty());
+	}
+
+	pVBI->AddVBIData(VBIParse::GenerateVBILeadOut());
+	pVBI->AddVBIData(VBIParse::GenerateVBILeadOut());
+
+	list<VBICompactEntry_t> lst;
+	bool b = pVBI->CompactVBIData(lst, NTSC);
+	TEST_CHECK(b == true);
+	TEST_REQUIRE_EQUAL((size_t) 3, lst.size());
+
+	VBICompactEntry_t a = lst.front(); lst.pop_front();
+	TEST_CHECK_EQUAL(PATTERN_LEADIN, a.typePattern);
+	TEST_CHECK_EQUAL(0u, a.u32StartAbsField);
+
+	VBICompactEntry_t b2 = lst.front(); lst.pop_front();
+	TEST_CHECK_EQUAL(PATTERN_22, b2.typePattern);
+	TEST_CHECK_EQUAL(2u, b2.u32StartAbsField);	// after 2 lead-in fields
+	TEST_CHECK_EQUAL(1, b2.i32StartPictureNumber);
+
+	VBICompactEntry_t c = lst.front(); lst.pop_front();
+	TEST_CHECK_EQUAL(PATTERN_LEADOUT, c.typePattern);
+	TEST_CHECK_EQUAL(10u, c.u32StartAbsField);	// 2 lead-in + 8 pattern fields
+
+	pVBI->ClearVBIData();
+}
+
+TEST(VBIParse, vbi_compact_lead_in_out_transitions)
+{
+	test_vbi_compact_lead_in_out_transitions();
+}
+
+void test_vbi_compact_23_pattern()
+{
+	// Exercise 2:3 (PATTERN_23) detection in CompactVBIData. 2:3 is a 5-field
+	// cycle: picnum, black, picnum+1, black, black.
+	VBIParseSPtr VBISPtr = VBIParse::GetInstance();
+	VBIParse *pVBI = VBISPtr.get();
+
+	pVBI->ClearVBIData();
+
+	for (unsigned int pn = 1; pn <= 4; pn++)
+	{
+		pVBI->AddVBIData(VBIParse::GenerateVBIFrame(2*pn - 1, NTSC));
+		pVBI->AddVBIData(VBIParse::GenerateVBIEmpty());
+		pVBI->AddVBIData(VBIParse::GenerateVBIFrame(2*pn, NTSC));
+		pVBI->AddVBIData(VBIParse::GenerateVBIEmpty());
+		pVBI->AddVBIData(VBIParse::GenerateVBIEmpty());
+	}
+
+	list<VBICompactEntry_t> lst;
+	bool b = pVBI->CompactVBIData(lst, NTSC);
+	TEST_CHECK(b == true);
+	TEST_REQUIRE(lst.size() >= 1);
+
+	VBICompactEntry_t a = lst.front();
+	TEST_CHECK_EQUAL(PATTERN_23, a.typePattern);
+	TEST_CHECK_EQUAL(1, a.i32StartPictureNumber);
+
+	pVBI->ClearVBIData();
+}
+
+TEST(VBIParse, vbi_compact_23_pattern)
+{
+	test_vbi_compact_23_pattern();
+}
+
+void test_vbi_compact_clears_existing_entries()
+{
+	// Pins the `lstEntries.clear()` at VBIParse.cpp:1085. Pre-populate the list
+	// with a fake entry; CompactVBIData must clear it before emitting its own.
+	VBIParseSPtr VBISPtr = VBIParse::GetInstance();
+	VBIParse *pVBI = VBISPtr.get();
+
+	pVBI->ClearVBIData();
+	for (unsigned int pn = 1; pn <= 4; pn++)
+	{
+		pVBI->AddVBIData(VBIParse::GenerateVBIFrame(pn, NTSC));
+		pVBI->AddVBIData(VBIParse::GenerateVBIEmpty());
+	}
+
+	list<VBICompactEntry_t> lstEntries;
+	VBICompactEntry_t fake;
+	memset(&fake, 0, sizeof(fake));
+	fake.typePattern = PATTERN_LEADOUT;
+	fake.i32StartPictureNumber = 9999;
+	lstEntries.push_back(fake);
+	lstEntries.push_back(fake);
+
+	TEST_CHECK(pVBI->CompactVBIData(lstEntries, NTSC));
+
+	// The first entry must be the PATTERN_22 one that the compactor emits, not
+	// the fake PATTERN_LEADOUT that we pre-loaded.
+	TEST_REQUIRE(lstEntries.size() >= 1);
+	VBICompactEntry_t front = lstEntries.front();
+	TEST_CHECK_EQUAL(PATTERN_22, front.typePattern);
+	TEST_CHECK_EQUAL(1, front.i32StartPictureNumber);
+
+	pVBI->ClearVBIData();
+}
+
+TEST(VBIParse, vbi_compact_clears_existing_entries)
+{
+	test_vbi_compact_clears_existing_entries();
+}
+
+void test_vbi_picnum_from_line17_fallback()
+{
+	// When line 18 is PARSE_FAILED, the compactor falls back to line 17 (pins
+	// the assign at VBIParse.cpp:1102). Build 4 fields where every line-18 is
+	// PARSE_FAILED but line-17 carries a proper 2:2 pattern.
+	VBIParseSPtr VBISPtr = VBIParse::GetInstance();
+	VBIParse *pVBI = VBISPtr.get();
+
+	pVBI->ClearVBIData();
+	for (unsigned int pn = 1; pn <= 4; pn++)
+	{
+		// Picnum field: line 17 carries the picnum, line 18 is PARSE_FAILED so
+		// the compactor must fall back to line 17 to recognise it.
+		VBI_t v;
+		memset(&v, 0, sizeof(v));
+		v.uVBI[1] = VBIParse::DecimalToPictureNumVBI(pn, NTSC);
+		v.uVBI[2] = VBIParse::PARSE_FAILED;
+		pVBI->AddVBIData(v);
+
+		// Spacer (PARSE_BLACK) field — not exercising the fallback here.
+		memset(&v, 0, sizeof(v));
+		v.uVBI[1] = 0;
+		v.uVBI[2] = 0;	// PARSE_BLACK
+		pVBI->AddVBIData(v);
+	}
+
+	list<VBICompactEntry_t> lst;
+	TEST_CHECK(pVBI->CompactVBIData(lst, NTSC));
+	TEST_REQUIRE(lst.size() >= 1);
+
+	VBICompactEntry_t front = lst.front();
+	TEST_CHECK_EQUAL(PATTERN_22, front.typePattern);
+	TEST_CHECK_EQUAL(1, front.i32StartPictureNumber);
+
+	pVBI->ClearVBIData();
+}
+
+TEST(VBIParse, vbi_picnum_from_line17_fallback)
+{
+	test_vbi_picnum_from_line17_fallback();
+}
+
+void test_vbi_verify_error_message_content()
+{
+	// Verifies the exact error-message substrings produced by the conflict
+	// branch in VerifyVBIData. Pins the `s += UintHexToStr(...)` / `std::to_string`
+	// chain at lines 907-911 (arithmetic and concat mutations). We do not
+	// assert the full message so the test remains robust to minor formatting
+	// tweaks, but we do assert that the specific hex values of line 17 and
+	// line 18 appear in it.
+	VBIParseSPtr VBISPtr = VBIParse::GetInstance();
+	VBIParse *pVBI = VBISPtr.get();
+
+	pVBI->ClearVBIData();
+
+	// Conflict: line 17 and line 18 are both defined but different, with no
+	// previous picture number to resolve. This produces an unresolvable error.
+	VBI_t v;
+	memset(&v, 0, sizeof(v));
+	v.uVBI[1] = 0xF80011;	// line 17
+	v.uVBI[2] = 0xF80099;	// line 18
+	pVBI->AddVBIData(v);
+
+	bool b = pVBI->VerifyVBIData(NTSC, false);
+	TEST_CHECK(b == false);
+	list<string> errs = pVBI->GetErrors();
+	TEST_REQUIRE(errs.size() >= 1);
+
+	const string &msg = errs.front();
+	// The message includes "Line 17 is F80011" and "Line 18 is F80099"
+	// verbatim (UintHexToStr uppercases and drops leading zeros).
+	TEST_CHECK(msg.find("F80011") != string::npos);
+	TEST_CHECK(msg.find("F80099") != string::npos);
+	// And the track index / field index are computed from uFieldIdx = 0 ->
+	// track 0, field 0. Any mutation of `uFieldIdx*10 + 4` or `uFieldIdx >> 1`
+	// would change the substring.
+	TEST_CHECK(msg.find("track 0") != string::npos);
+
+	pVBI->ClearVBIData();
+}
+
+TEST(VBIParse, vbi_verify_error_message_content)
+{
+	test_vbi_verify_error_message_content();
+}
+
+void test_vbi_compact_22_with_exactly_two_fields()
+{
+	// The 2:2 detection check at VBIParse.cpp:1287 requires stFieldsRemaining
+	// >= 2. With exactly 2 fields of (picnum, BLACK), the original passes
+	// (>=) and produces PATTERN_22. A `>` mutation would reject and fall
+	// through to PATTERN_PICNUM.
+	VBIParseSPtr VBISPtr = VBIParse::GetInstance();
+	VBIParse *pVBI = VBISPtr.get();
+
+	pVBI->ClearVBIData();
+	pVBI->AddVBIData(VBIParse::GenerateVBIFrame(1, NTSC));
+	pVBI->AddVBIData(VBIParse::GenerateVBIEmpty());
+
+	list<VBICompactEntry_t> lst;
+	TEST_CHECK(pVBI->CompactVBIData(lst, NTSC));
+	TEST_REQUIRE(lst.size() >= 1);
+	TEST_CHECK_EQUAL(PATTERN_22, lst.front().typePattern);
+
+	pVBI->ClearVBIData();
+}
+
+TEST(VBIParse, vbi_compact_22_with_exactly_two_fields)
+{
+	test_vbi_compact_22_with_exactly_two_fields();
+}
+
+void test_vbi_compact_22_atari_with_exactly_two_fields()
+{
+	// The 2:2 Atari detection at VBIParse.cpp:1332 requires stFieldsRemaining
+	// >= 2. With 2 fields (0xF80001 then 0xA80002), the original detects
+	// PATTERN_22_ATARI; a `>` variant at line 1332:32 would fall through.
+	VBIParseSPtr VBISPtr = VBIParse::GetInstance();
+	VBIParse *pVBI = VBISPtr.get();
+
+	pVBI->ClearVBIData();
+	VBI_t v;
+	memset(&v, 0, sizeof(v));
+
+	v.uVBI[1] = v.uVBI[2] = 0xF80001;	// picnum 1
+	pVBI->AddVBIData(v);
+
+	v.uVBI[1] = v.uVBI[2] = VBIParse::DecimalToPictureNumVBI(2, NTSC) & 0xAFFFFF;
+	pVBI->AddVBIData(v);
+
+	list<VBICompactEntry_t> lst;
+	TEST_CHECK(pVBI->CompactVBIData(lst, NTSC));
+	TEST_REQUIRE(lst.size() >= 1);
+	TEST_CHECK_EQUAL(PATTERN_22_ATARI, lst.front().typePattern);
+
+	pVBI->ClearVBIData();
+}
+
+TEST(VBIParse, vbi_compact_22_atari_with_exactly_two_fields)
+{
+	test_vbi_compact_22_atari_with_exactly_two_fields();
+}
+
+void test_vbi_compact_ignores_prev_field_for_first_entry()
+{
+	// Pins VBIParse.cpp:1213 (`if (stFieldIdx > 0)` - `>=` variant would try to
+	// peek at vParseVBI[-1], which is out-of-bounds). Start with a 2:2 pattern
+	// beginning at field 0 - compactor must NOT look at the (non-existent)
+	// previous field.
+	VBIParseSPtr VBISPtr = VBIParse::GetInstance();
+	VBIParse *pVBI = VBISPtr.get();
+
+	pVBI->ClearVBIData();
+	for (unsigned int pn = 1; pn <= 4; pn++)
+	{
+		pVBI->AddVBIData(VBIParse::GenerateVBIFrame(pn, NTSC));
+		pVBI->AddVBIData(VBIParse::GenerateVBIEmpty());
+	}
+
+	list<VBICompactEntry_t> lst;
+	TEST_CHECK(pVBI->CompactVBIData(lst, NTSC));
+	TEST_REQUIRE(lst.size() >= 1);
+	VBICompactEntry_t front = lst.front();
+	TEST_CHECK_EQUAL(PATTERN_22, front.typePattern);
+	TEST_CHECK_EQUAL(0u, front.u32StartAbsField);	// starts at 0, not -1
+	TEST_CHECK_EQUAL(1, front.i32StartPictureNumber);
+	TEST_CHECK_EQUAL((uint8_t) 0, front.u8PatternOffset);
+
+	pVBI->ClearVBIData();
+}
+
+TEST(VBIParse, vbi_compact_ignores_prev_field_for_first_entry)
+{
+	test_vbi_compact_ignores_prev_field_for_first_entry();
+}
+
+void test_vbi_verify_cube_quest_field_index_guard()
+{
+	// VerifyVBIData's Cube Quest autofix is gated by `if (uFieldIdx > 2)`
+	// at line 864. With uFieldIdx==2, original: skip the fix (line 18 stays
+	// PARSE_FAILED). `>=` mutant: enter the fix when prev-field is a picnum
+	// AND the field before that is a chapter -> overwrite line 18 with the
+	// chapter code. Our test places a chapter/picnum/black-failed trio at
+	// indices 0/1/2 so that the mutant's fix triggers, while the original
+	// leaves field-2's line 18 untouched.
+	VBIParseSPtr VBISPtr = VBIParse::GetInstance();
+	VBIParse *pVBI = VBISPtr.get();
+
+	pVBI->ClearVBIData();
+
+	// field 0: chapter
+	VBI_t v;
+	memset(&v, 0, sizeof(v));
+	v.uVBI[1] = v.uVBI[2] = 0x885DDD;	// chapter 5
+	pVBI->AddVBIData(v);
+
+	// field 1: picnum
+	memset(&v, 0, sizeof(v));
+	v.uVBI[1] = v.uVBI[2] = 0xF80001;
+	pVBI->AddVBIData(v);
+
+	// field 2: line17=BLACK, line18=FAILED
+	memset(&v, 0, sizeof(v));
+	v.uVBI[1] = VBIParse::PARSE_BLACK;
+	v.uVBI[2] = VBIParse::PARSE_FAILED;
+	pVBI->AddVBIData(v);
+
+	(void) pVBI->VerifyVBIData(NTSC, true);
+
+	VBI_t got;
+	TEST_REQUIRE(pVBI->GetVBIData(got, 2));
+	// With original >, field 2's line 18 is still PARSE_FAILED. Mutant >=
+	// would have fixed it to 0x885DDD.
+	TEST_CHECK_EQUAL((unsigned int) VBIParse::PARSE_FAILED, got.uVBI[2]);
+
+	pVBI->ClearVBIData();
+}
+
+TEST(VBIParse, vbi_verify_cube_quest_field_index_guard)
+{
+	test_vbi_verify_cube_quest_field_index_guard();
+}
+
+void test_vbi_verify_cube_quest_autofix_applies()
+{
+	// Complement of the previous test: with uFieldIdx=3 and the pattern
+	// [unused, chapter, picnum, black-failed], autoFix MUST apply the fix.
+	// Pins the `IsPictureNum(vParseVBI[uFieldIdx-1])` and
+	// `IsChapterNum(vParseVBI[uFieldIdx-2])` calls at lines 868-869 and the
+	// assignment at line 871.
+	VBIParseSPtr VBISPtr = VBIParse::GetInstance();
+	VBIParse *pVBI = VBISPtr.get();
+
+	pVBI->ClearVBIData();
+
+	// field 0: anything (e.g., picnum)
+	VBI_t v;
+	memset(&v, 0, sizeof(v));
+	v.uVBI[1] = v.uVBI[2] = 0xF80005;
+	pVBI->AddVBIData(v);
+
+	// field 1: chapter
+	memset(&v, 0, sizeof(v));
+	v.uVBI[1] = v.uVBI[2] = 0x885DDD;	// chapter 5
+	pVBI->AddVBIData(v);
+
+	// field 2: picnum
+	memset(&v, 0, sizeof(v));
+	v.uVBI[1] = v.uVBI[2] = 0xF80006;
+	pVBI->AddVBIData(v);
+
+	// field 3: line17=BLACK, line18=FAILED
+	memset(&v, 0, sizeof(v));
+	v.uVBI[1] = VBIParse::PARSE_BLACK;
+	v.uVBI[2] = VBIParse::PARSE_FAILED;
+	pVBI->AddVBIData(v);
+
+	(void) pVBI->VerifyVBIData(NTSC, true);
+
+	VBI_t got;
+	TEST_REQUIRE(pVBI->GetVBIData(got, 3));
+	// Fix must have been applied: field-3's line 18 now equals field-1's
+	// line 18 (the chapter code).
+	TEST_CHECK_EQUAL(0x885DDDu, got.uVBI[2]);
+
+	pVBI->ClearVBIData();
+}
+
+TEST(VBIParse, vbi_verify_cube_quest_autofix_applies)
+{
+	test_vbi_verify_cube_quest_autofix_applies();
+}
+
+void test_vbi_compact_standalone_chapter()
+{
+	// Two consecutive chapter-only fields compact into a single PATTERN_ZEROES
+	// entry whose u16Special has EVENT_CHAPTER set and the chapter number
+	// stored in the low byte. Pins VBIParse.cpp:1350 (typePattern = PATTERN_ZEROES),
+	// :1351 (u16Special = ChapterNumVBIToDecimal(...)), :1352 (u16Special |= EVENT_CHAPTER).
+	VBIParseSPtr VBISPtr = VBIParse::GetInstance();
+	VBIParse *pVBI = VBISPtr.get();
+
+	pVBI->ClearVBIData();
+	pVBI->AddVBIData(VBIParse::GenerateVBIChapter(5));
+	pVBI->AddVBIData(VBIParse::GenerateVBIChapter(5));
+
+	list<VBICompactEntry_t> lst;
+	TEST_CHECK(pVBI->CompactVBIData(lst, NTSC));
+	TEST_REQUIRE(lst.size() >= 1);
+
+	VBICompactEntry_t e = lst.front();
+	TEST_CHECK_EQUAL(PATTERN_ZEROES, e.typePattern);
+	uint8_t ch = 0;
+	TEST_CHECK_EQUAL(VBIC_TRUE, VBIC_GetChapterInfo(&e, &ch));
+	TEST_CHECK_EQUAL(5, ch);
+
+	pVBI->ClearVBIData();
+}
+
+TEST(VBIParse, vbi_compact_standalone_chapter)
+{
+	test_vbi_compact_standalone_chapter();
+}
+
+void test_vbi_compact_multi_entry_u32StartAbsField()
+{
+	// Forces CompactVBIData to produce multiple entries with non-zero
+	// u32StartAbsField. Pins VBIParse.cpp:1192 (`entry.u32StartAbsField = stFieldIdx`)
+	// where a mutant = 42 would collapse every second entry's start field to 42.
+	VBIParseSPtr VBISPtr = VBIParse::GetInstance();
+	VBIParse *pVBI = VBISPtr.get();
+
+	pVBI->ClearVBIData();
+
+	pVBI->AddVBIData(VBIParse::GenerateVBILeadIn());
+	pVBI->AddVBIData(VBIParse::GenerateVBILeadIn());
+	for (unsigned int pn = 1; pn <= 4; pn++)
+	{
+		pVBI->AddVBIData(VBIParse::GenerateVBIFrame(pn, NTSC));
+		pVBI->AddVBIData(VBIParse::GenerateVBIEmpty());
+	}
+	pVBI->AddVBIData(VBIParse::GenerateVBIChapter(3));
+	pVBI->AddVBIData(VBIParse::GenerateVBIChapter(3));
+	pVBI->AddVBIData(VBIParse::GenerateVBILeadOut());
+	pVBI->AddVBIData(VBIParse::GenerateVBILeadOut());
+
+	list<VBICompactEntry_t> lst;
+	TEST_CHECK(pVBI->CompactVBIData(lst, NTSC));
+	TEST_REQUIRE(lst.size() >= 4);
+
+	// LEADIN at field 0
+	VBICompactEntry_t e = lst.front(); lst.pop_front();
+	TEST_CHECK_EQUAL(PATTERN_LEADIN, e.typePattern);
+	TEST_CHECK_EQUAL(0u, e.u32StartAbsField);
+
+	// PATTERN_22 at field 2 (after 2 lead-in fields)
+	e = lst.front(); lst.pop_front();
+	TEST_CHECK_EQUAL(PATTERN_22, e.typePattern);
+	TEST_CHECK_EQUAL(2u, e.u32StartAbsField);
+
+	// CHAPTER at field 10 (after 8 pattern fields + 2 lead-in)
+	e = lst.front(); lst.pop_front();
+	TEST_CHECK_EQUAL(PATTERN_ZEROES, e.typePattern);
+	TEST_CHECK_EQUAL(10u, e.u32StartAbsField);
+
+	// LEADOUT at field 12
+	e = lst.front(); lst.pop_front();
+	TEST_CHECK_EQUAL(PATTERN_LEADOUT, e.typePattern);
+	TEST_CHECK_EQUAL(12u, e.u32StartAbsField);
+
+	pVBI->ClearVBIData();
+}
+
+TEST(VBIParse, vbi_compact_multi_entry_u32StartAbsField)
+{
+	test_vbi_compact_multi_entry_u32StartAbsField();
+}
+
+void test_vbi_verify_no_warnings_for_valid_sequence()
+{
+	// A clean 2:2 pattern of 10 frames should produce ZERO warnings and ZERO
+	// errors. Anything wrong with the counter/condition mutants in VerifyVBIData
+	// (e.g., uFieldsSincePicNum++ flipped to --, or `>` flipped to `>=` on
+	// the picnum comparator, or the uTrackIdx computation) would manifest as
+	// spurious warnings. This is a regression-style test that pins many
+	// arithmetic and comparator mutations at once.
+	VBIParseSPtr VBISPtr = VBIParse::GetInstance();
+	VBIParse *pVBI = VBISPtr.get();
+
+	pVBI->ClearVBIData();
+	for (unsigned int pn = 1; pn <= 10; pn++)
+	{
+		pVBI->AddVBIData(VBIParse::GenerateVBIFrame(pn, NTSC));
+		pVBI->AddVBIData(VBIParse::GenerateVBIEmpty());
+	}
+
+	TEST_CHECK(pVBI->VerifyVBIData(NTSC, false));
+	TEST_CHECK_EQUAL((size_t) 0, pVBI->GetWarnings().size());
+	TEST_CHECK_EQUAL((size_t) 0, pVBI->GetErrors().size());
+
+	pVBI->ClearVBIData();
+}
+
+TEST(VBIParse, vbi_verify_no_warnings_for_valid_sequence)
+{
+	test_vbi_verify_no_warnings_for_valid_sequence();
+}
+
