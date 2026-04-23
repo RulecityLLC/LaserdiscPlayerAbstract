@@ -1886,6 +1886,18 @@ void test_ldpc_abs_field_and_error_status()
 	ldpc_set_current_abs_field(3);
 	TEST_CHECK_EQUAL(3u, ldpc_get_current_abs_field());
 
+	// Verify the internal VBIC_SetField call at ldpc.c:639 actually ran — it
+	// updates the line-18 value reported by ldpc_get_current_field_vbi_line18.
+	// make_vbi4 is PATTERN_22 starting at picnum 1; field 0 is even -> line18
+	// encodes picnum 1 (0xF80001), and field 2 is even -> picnum 2 (0xF80002).
+	// If VBIC_SetField is elided (cxx_replace_scalar_call), the line-18 value
+	// would stay at whatever was last loaded, which diverges from the field
+	// we just set.
+	ldpc_set_current_abs_field(0);
+	TEST_CHECK_EQUAL(0xF80001u, ldpc_get_current_field_vbi_line18());
+	ldpc_set_current_abs_field(2);
+	TEST_CHECK_EQUAL(0xF80002u, ldpc_get_current_field_vbi_line18());
+
 	// ldpc_set_error_status must flip status to exactly LDPC_ERROR.
 	ldpc_set_error_status();
 	TEST_CHECK_EQUAL(LDPC_ERROR, ldpc_get_status());
@@ -1894,4 +1906,192 @@ void test_ldpc_abs_field_and_error_status()
 TEST(LDPC, ldpc_abs_field_and_error_status)
 {
 	test_ldpc_abs_field_and_error_status();
+}
+
+void test_ldpc_stop_resets_state()
+{
+	// ldpc_stop must: flip status to STOPPED, clear frame num to VBIMiniNoFrame,
+	// and reset uCurrentField to (uint32_t) -1. Each line is pinned by a direct
+	// observable check below — this kills the three cxx_assign_const mutants
+	// at ldpc.c lines 201, 203, 204.
+	VBICompact_t compact;
+	make_vbi4(&compact);
+
+	ldpc_init(LDPC_DISC_NTSC, &compact);
+
+	// drive the state into PLAYING so we can observe the reset
+	ldpc_play(LDPC_FORWARD);
+	ldpc_OnVBlankChanged(LDPC_TRUE, VID_FIELD_TOP_ODD);
+	TEST_CHECK_EQUAL(LDPC_PLAYING, ldpc_get_status());
+
+	// Seed the "on stop" observable fields with known non-sentinel values via
+	// normal playback so we can verify they're reset.
+	ldpc_set_current_abs_field(5);
+	TEST_CHECK_EQUAL(5u, ldpc_get_current_abs_field());
+
+	// Advance VBIC to a non-starting field so we can see the "VBIC_SetField(0)"
+	// inside ldpc_stop actually run (pins cxx_replace_scalar_call at
+	// ldpc.c:207). At field 6 under PATTERN_22 starting at picnum 1, line18
+	// reads 0xF80004; after stop it should revert to field 0 -> 0xF80001.
+	ldpc_set_current_abs_field(6);
+	TEST_CHECK_EQUAL(0xF80004u, ldpc_get_current_field_vbi_line18());
+
+	ldpc_stop();
+
+	TEST_CHECK_EQUAL(LDPC_STOPPED, ldpc_get_status());
+	TEST_CHECK_EQUAL((uint32_t) VBIMiniNoFrame, ldpc_get_cur_frame_num());
+	TEST_CHECK_EQUAL(~0u, ldpc_get_current_field());
+	TEST_CHECK_EQUAL(0xF80001u, ldpc_get_current_field_vbi_line18());
+}
+
+TEST(LDPC, ldpc_stop_resets_state)
+{
+	test_ldpc_stop_resets_state();
+}
+
+void test_ldpc_change_speed_paths()
+{
+	VBICompact_t compact;
+	make_vbi4(&compact);
+
+	ldpc_init(LDPC_DISC_NTSC, &compact);
+
+	// >= 1X, non-zero numerator: success with exact LDPC_TRUE.
+	TEST_CHECK_EQUAL(LDPC_TRUE, ldpc_change_speed(1, 1));
+	TEST_CHECK_EQUAL(LDPC_TRUE, ldpc_change_speed(2, 1));
+
+	// < 1X (numerator 1, denominator > 1): success. Pins the uDenominator > 0
+	// boundary and the fact that a non-zero denominator survives the branch.
+	TEST_CHECK_EQUAL(LDPC_TRUE, ldpc_change_speed(1, 2));
+	TEST_CHECK_EQUAL(LDPC_TRUE, ldpc_change_speed(1, 3));
+
+	// back to 1X to confirm the "uTracksToStallPerFrame = 0" path re-runs cleanly.
+	TEST_CHECK_EQUAL(LDPC_TRUE, ldpc_change_speed(1, 1));
+
+	// failure paths must return exactly LDPC_FALSE, not just non-zero.
+	TEST_CHECK_EQUAL(LDPC_FALSE, ldpc_change_speed(0, 1));	// 0/1 = 0X
+	TEST_CHECK_EQUAL(LDPC_FALSE, ldpc_change_speed(1, 0));	// /0 = divide by zero
+
+	// unsupported ratio (numerator != 1 and denominator != 1) -> not handled,
+	// should also return LDPC_FALSE
+	TEST_CHECK_EQUAL(LDPC_FALSE, ldpc_change_speed(3, 2));
+}
+
+TEST(LDPC, ldpc_change_speed_paths)
+{
+	test_ldpc_change_speed_paths();
+}
+
+void test_ldpc_video_mute_strict()
+{
+	// Strengthens the existing test_ldpc_video_mute with exact-equality checks
+	// on the LDPC_TRUE side so cxx_assign_const mutations that replace the
+	// stored byte with 42 can't slip through `!= 0`.
+	VBICompact_t compact;
+	make_vbi4(&compact);
+
+	ldpc_init(LDPC_DISC_NTSC, &compact);
+
+	TEST_CHECK_EQUAL(LDPC_FALSE, ldpc_get_video_muted());
+	ldpc_set_video_muted(LDPC_TRUE);
+	TEST_CHECK_EQUAL(LDPC_TRUE, ldpc_get_video_muted());
+	ldpc_set_video_muted(LDPC_FALSE);
+	TEST_CHECK_EQUAL(LDPC_FALSE, ldpc_get_video_muted());
+}
+
+TEST(LDPC, ldpc_video_mute_strict)
+{
+	test_ldpc_video_mute_strict();
+}
+
+void test_ldpc_begin_search_error()
+{
+	// begin_search must set status to LDPC_ERROR when VBIC_SEEK fails. Build a
+	// VBIC whose only entry is PATTERN_LEADOUT — VBIC_SeekInternal's default
+	// case on unsupported patterns returns VBIC_SEEK_FAIL, which triggers the
+	// "set status to ERROR" branch in ldpc_begin_search (line 82, pins
+	// cxx_remove_void_call).
+	VBICompact_t compact;
+	make_vbi4(&compact);
+	ldpc_init(LDPC_DISC_NTSC, &compact);
+
+	// successful search sets status to SEARCHING.
+	LDPC_BOOL bRes = ldpc_begin_search(1);
+	TEST_CHECK_EQUAL(LDPC_TRUE, bRes);
+	TEST_CHECK_EQUAL(LDPC_SEARCHING, ldpc_get_status());
+
+	// Now build a failing compact: single LEADOUT entry, no pattern data.
+	static VBICompactEntry_t leadOutEntries[1];
+	leadOutEntries[0].u32StartAbsField = 0;
+	leadOutEntries[0].i32StartPictureNumber = 0;
+	leadOutEntries[0].typePattern = PATTERN_LEADOUT;
+	leadOutEntries[0].u16Special = 0;
+	leadOutEntries[0].u8PatternOffset = 0;
+
+	static VBICompact_t leadOutCompact;
+	leadOutCompact.uEntryCount = 1;
+	leadOutCompact.pEntries = leadOutEntries;
+	leadOutCompact.uTotalFields = 10;
+
+	ldpc_init(LDPC_DISC_NTSC, &leadOutCompact);
+	bRes = ldpc_begin_search(5);	// will go to LEADOUT default case -> SEEK_FAIL
+	TEST_CHECK_EQUAL(LDPC_FALSE, bRes);
+	TEST_CHECK_EQUAL(LDPC_ERROR, ldpc_get_status());
+}
+
+TEST(LDPC, ldpc_begin_search_error)
+{
+	test_ldpc_begin_search_error();
+}
+
+void test_ldpc_pause_before_play_sets_error()
+{
+	// In ldpc.c ldpc_pause(): if uCurrentField is undefined (~0) AND status is
+	// PLAYING or STEPPING, the function switches status to LDPC_ERROR. Step
+	// before vblank: status becomes STEPPING with uCurrentField still ~0, so
+	// pause must flip status to ERROR. Pins the ldpc_change_status(LDPC_ERROR)
+	// call at line 195.
+	VBICompact_t compact;
+	make_vbi4(&compact);
+	ldpc_init(LDPC_DISC_NTSC, &compact);
+
+	ldpc_step(LDPC_FORWARD);
+	TEST_CHECK_EQUAL(LDPC_STEPPING, ldpc_get_status());
+	// Note: no ldpc_OnVBlankChanged call yet, so uCurrentField is still ~0.
+
+	ldpc_pause();
+	TEST_CHECK_EQUAL(LDPC_ERROR, ldpc_get_status());
+}
+
+TEST(LDPC, ldpc_pause_before_play_sets_error)
+{
+	test_ldpc_pause_before_play_sets_error();
+}
+
+void test_ldpc_skip_tracks_while_playing()
+{
+	// In ldpc.c ldpc_skip_tracks: when status is PLAYING or PAUSED, iTracks is
+	// added to iSkipTrackOffset and LDPC_TRUE is returned. Pins:
+	//   - line 108: iSkipTrackOffset += iTracks (would fail if += became -=)
+	//     is hard to observe without a getter, so we only observe return value
+	//   - line 109: bRes = LDPC_TRUE (pinned by exact equality)
+	VBICompact_t compact;
+	make_vbi4(&compact);
+	ldpc_init(LDPC_DISC_NTSC, &compact);
+
+	ldpc_play(LDPC_FORWARD);
+	ldpc_OnVBlankChanged(LDPC_TRUE, VID_FIELD_TOP_ODD);
+	TEST_CHECK_EQUAL(LDPC_PLAYING, ldpc_get_status());
+
+	TEST_CHECK_EQUAL(LDPC_TRUE, ldpc_skip_tracks(1));
+	TEST_CHECK_EQUAL(LDPC_TRUE, ldpc_skip_tracks(-1));
+
+	ldpc_pause();
+	TEST_CHECK_EQUAL(LDPC_PAUSED, ldpc_get_status());
+	TEST_CHECK_EQUAL(LDPC_TRUE, ldpc_skip_tracks(2));
+}
+
+TEST(LDPC, ldpc_skip_tracks_while_playing)
+{
+	test_ldpc_skip_tracks_while_playing();
 }
