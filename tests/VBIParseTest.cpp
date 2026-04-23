@@ -369,3 +369,124 @@ TEST(VBIParse, vbi_pic_num)
 {
 	test_vbi_pic_num();
 }
+
+void test_vbi_generators()
+{
+	// Direct field assertions on every GenerateVBI* helper. These kill a cluster
+	// of cxx_assign_const mutations (0 or specific-hex becomes 42) because most
+	// callers consume the output through downstream code that can't distinguish
+	// all the values from 42.
+
+	VBI_t vbi;
+
+	// GenerateVBIFrame (NTSC)
+	vbi = VBIParse::GenerateVBIFrame(12345, NTSC);
+	TEST_CHECK(vbi.bWhiteFlag == false);
+	TEST_CHECK_EQUAL(0, vbi.uVBI[0]);
+	// uVBI[1] == DecimalToPictureNumVBI(12345, NTSC) == (0x12345 | 0xF80000)
+	TEST_CHECK_EQUAL(0xF92345, vbi.uVBI[1]);
+	TEST_CHECK_EQUAL(vbi.uVBI[1], vbi.uVBI[2]);
+
+	// GenerateVBIFrame (PAL) — no NTSC white-flag bit, so top nibble is 0xF
+	vbi = VBIParse::GenerateVBIFrame(12345, PAL);
+	TEST_CHECK(vbi.bWhiteFlag == false);
+	TEST_CHECK_EQUAL(0, vbi.uVBI[0]);
+	TEST_CHECK_EQUAL(0xF12345, vbi.uVBI[1]);
+	TEST_CHECK_EQUAL(vbi.uVBI[1], vbi.uVBI[2]);
+
+	// GenerateVBIEmpty
+	vbi = VBIParse::GenerateVBIEmpty();
+	TEST_CHECK(vbi.bWhiteFlag == false);
+	TEST_CHECK_EQUAL(0, vbi.uVBI[0]);
+	TEST_CHECK_EQUAL(0, vbi.uVBI[1]);
+	TEST_CHECK_EQUAL(0, vbi.uVBI[2]);
+
+	// GenerateVBIChapter
+	vbi = VBIParse::GenerateVBIChapter(7);
+	TEST_CHECK(vbi.bWhiteFlag == false);
+	TEST_CHECK_EQUAL(0, vbi.uVBI[0]);
+	// DecimalToChapterNumVBI(7) = 0x880DDD | (0x7 << 12) = 0x887DDD
+	TEST_CHECK_EQUAL(0x887DDD, vbi.uVBI[1]);
+	TEST_CHECK_EQUAL(vbi.uVBI[1], vbi.uVBI[2]);
+
+	// GenerateVBIStopCode
+	vbi = VBIParse::GenerateVBIStopCode();
+	TEST_CHECK(vbi.bWhiteFlag == false);
+	TEST_CHECK_EQUAL(0x82CFFF, vbi.uVBI[0]);
+	TEST_CHECK_EQUAL(0x82CFFF, vbi.uVBI[1]);
+	TEST_CHECK_EQUAL(0, vbi.uVBI[2]);
+
+	// GenerateVBILeadIn
+	vbi = VBIParse::GenerateVBILeadIn();
+	TEST_CHECK(vbi.bWhiteFlag == false);
+	TEST_CHECK_EQUAL(0, vbi.uVBI[0]);
+	TEST_CHECK_EQUAL(0x88FFFF, vbi.uVBI[1]);
+	TEST_CHECK_EQUAL(0x88FFFF, vbi.uVBI[2]);
+
+	// GenerateVBILeadOut
+	vbi = VBIParse::GenerateVBILeadOut();
+	TEST_CHECK(vbi.bWhiteFlag == false);
+	TEST_CHECK_EQUAL(0, vbi.uVBI[0]);
+	TEST_CHECK_EQUAL(0x80EEEE, vbi.uVBI[1]);
+	TEST_CHECK_EQUAL(0x80EEEE, vbi.uVBI[2]);
+}
+
+TEST(VBIParse, vbi_generators)
+{
+	test_vbi_generators();
+}
+
+void test_vbi_classifiers()
+{
+	// IsStopCode: equality check against a fixed constant.
+	TEST_CHECK(VBIParse::IsStopCode(0x82CFFF) == true);
+	TEST_CHECK(VBIParse::IsStopCode(0x82CFFE) == false);
+	TEST_CHECK(VBIParse::IsStopCode(0) == false);
+
+	// IsChapterNum: masked-equality check.
+	TEST_CHECK(VBIParse::IsChapterNum(0x800DDD) == true);	// chapter 0
+	TEST_CHECK(VBIParse::IsChapterNum(0x887DDD) == true);	// chapter 7 (middle bits vary, mask ignores them)
+	TEST_CHECK(VBIParse::IsChapterNum(0x800DDE) == false);	// differs in low bits
+	TEST_CHECK(VBIParse::IsChapterNum(0x900DDD) == false);	// differs in top nibble
+
+	// IsVBIDefined: top bit of a 24-bit value must be set.
+	TEST_CHECK(VBIParse::IsVBIDefined(0x800000) == true);
+	TEST_CHECK(VBIParse::IsVBIDefined(0xF12345) == true);
+	TEST_CHECK(VBIParse::IsVBIDefined(0x7FFFFF) == false);
+	TEST_CHECK(VBIParse::IsVBIDefined(0) == false);
+}
+
+TEST(VBIParse, vbi_classifiers)
+{
+	test_vbi_classifiers();
+}
+
+void test_vbi_decimal_conversions()
+{
+	// Round-trip picture number (NTSC). DecimalToPictureNumVBI treats the
+	// decimal digits as a hex literal, so 54321 -> 0x54321 | NTSC_HEADER(0xF80000).
+	unsigned int uVBI = VBIParse::DecimalToPictureNumVBI(54321, NTSC);
+	TEST_CHECK_EQUAL(0xFD4321, uVBI);
+	TEST_CHECK_EQUAL(54321u, VBIParse::PictureNumVBIToDecimal(uVBI, NTSC));
+
+	// PAL variant: 0x54321 | PAL_HEADER(0xF00000).
+	uVBI = VBIParse::DecimalToPictureNumVBI(54321, PAL);
+	TEST_CHECK_EQUAL(0xF54321, uVBI);
+	TEST_CHECK_EQUAL(54321u, VBIParse::PictureNumVBIToDecimal(uVBI, PAL));
+
+	// Round-trip chapter number: 0x880DDD | (0x42 << 12).
+	unsigned int uCh = VBIParse::DecimalToChapterNumVBI(42);
+	TEST_CHECK_EQUAL(0x8C2DDD, uCh);
+	TEST_CHECK_EQUAL(42u, VBIParse::ChapterNumVBIToDecimal(uCh));
+
+	// stoi-throw path in PictureNumVBIToDecimal: PAL mask keeps top nibble 0xA,
+	// which makes the intermediate string start with a non-decimal digit and
+	// std::stoi throws std::invalid_argument. Expected result is 0 (from the
+	// catch block), which is distinct from 42.
+	TEST_CHECK_EQUAL(0u, VBIParse::PictureNumVBIToDecimal(0xA0000, PAL));
+}
+
+TEST(VBIParse, vbi_decimal_conversions)
+{
+	test_vbi_decimal_conversions();
+}
