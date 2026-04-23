@@ -2269,6 +2269,51 @@ TEST(VBICompact, set_vbi_invalid)
 	test_set_vbi_invalid();
 }
 
+void test_set_vbi_boundary()
+{
+	// Verifies the range check in VBIC_SetField uses >= (not >), so the first
+	// out-of-range field (uAbsoluteField == uTotalFields) is rejected.
+	VBIParseSPtr VBISPtr = VBIParse::GetInstance();
+	VBIParse *pVBI = VBISPtr.get();
+	VBI_t vbi;
+
+	vbi = VBIParse::GenerateVBIFrame(20454, NTSC);
+	pVBI->AddVBIData(vbi);
+	vbi = VBIParse::GenerateVBIChapter(0);
+	pVBI->AddVBIData(vbi);
+	vbi = VBIParse::GenerateVBIFrame(20455, NTSC);
+	pVBI->AddVBIData(vbi);
+	vbi = VBIParse::GenerateVBIChapter(0);
+	pVBI->AddVBIData(vbi);
+
+	list<VBICompactEntry_t> lstEntries;
+	pVBI->CompactVBIData(lstEntries, NTSC);
+
+	VBICompactEntry_t entries[1];
+	VBICompact_t compact;
+
+	compact.uEntryCount = 1;
+	compact.pEntries = entries;
+	compact.uTotalFields = 5678;
+
+	entries[0] = lstEntries.front();
+
+	VBIC_Init(&compact);
+
+	// last valid field (uTotalFields - 1) must be accepted
+	VBIC_BOOL bInside = VBIC_SetField(compact.uTotalFields - 1);
+	TEST_REQUIRE(bInside == VBIC_TRUE);
+
+	// exact boundary (uAbsoluteField == uTotalFields) must be rejected
+	VBIC_BOOL bAt = VBIC_SetField(compact.uTotalFields);
+	TEST_REQUIRE(bAt == VBIC_FALSE);
+}
+
+TEST(VBICompact, set_vbi_boundary)
+{
+	test_set_vbi_boundary();
+}
+
 void test_set_loadline_invalid()
 {
 	VBIParseSPtr VBISPtr = VBIParse::GetInstance();
@@ -2331,4 +2376,124 @@ void test_vbi_frame_conversion()
 TEST(VBICompact, vbi_frame_conversion)
 {
 	test_vbi_frame_conversion();
+}
+
+void test_vbic_chapter_info()
+{
+	// Exercises VBIC_GetChapterInfo / VBIC_SetChapterInfo / VBIC_ClearChapterInfo
+	// directly with exact-value comparisons so cxx_assign_const and
+	// cxx_remove_void_call mutations on these helpers can be detected.
+	VBICompactEntry_t entry;
+	entry.u16Special = 0;
+
+	uint8_t uChapter = 99;
+	VBIC_BOOL b = VBIC_GetChapterInfo(&entry, &uChapter);
+	TEST_CHECK_EQUAL(VBIC_FALSE, b);	// no chapter flag yet -> must be exactly 0
+
+	// Pre-load a DIFFERENT chapter bit pattern so that if VBIC_SetChapterInfo
+	// skips the internal VBIC_ClearChapterInfo call, the stale bits will leak
+	// through and produce the wrong chapter number.
+	entry.u16Special = 0x7F;	// stale "chapter 127" bits, no EVENT_CHAPTER flag
+
+	VBIC_SetChapterInfo(&entry, 3);
+
+	b = VBIC_GetChapterInfo(&entry, &uChapter);
+	TEST_CHECK(b == VBIC_TRUE);	// exact-value comparison (42 != 1)
+	TEST_CHECK_EQUAL(3, uChapter);	// would be 0x7F if ClearChapterInfo was skipped
+
+	VBIC_ClearChapterInfo(&entry);
+	b = VBIC_GetChapterInfo(&entry, &uChapter);
+	TEST_CHECK_EQUAL(VBIC_FALSE, b);
+}
+
+TEST(VBICompact, vbic_chapter_info)
+{
+	test_vbic_chapter_info();
+}
+
+void test_vbic_buffer_too_small()
+{
+	// VBIC_ToBuffer must return 0 when the destination buffer can't fit the
+	// serialized entries. This pins the `stRes = 0` initializer (otherwise the
+	// mutated `stRes = 42` slips through for the too-small path).
+	VBICompactEntry_t entries[1];
+	entries[0].u32StartAbsField = 0;
+	entries[0].i32StartPictureNumber = 0;
+	entries[0].typePattern = PATTERN_22;
+	entries[0].u16Special = 0;
+	entries[0].u8PatternOffset = 0;
+
+	VBICompact_t compact;
+	compact.uEntryCount = 1;
+	compact.pEntries = entries;
+	compact.uTotalFields = 100;
+
+	// needs 6 + (1 * 12) = 18 bytes; give only 17
+	unsigned char buf[17];
+	size_t stRes = VBIC_ToBuffer(buf, sizeof(buf), &compact);
+	TEST_CHECK_EQUAL(0u, stRes);
+
+	// and invalid version byte in VBIC_FromBuffer must also return VBIC_FALSE
+	unsigned char badBuf[18];
+	memset(badBuf, 0, sizeof(badBuf));
+	badBuf[0] = 1;	// non-zero version -> reject
+	VBICompactEntry_t dstEntries[1];
+	VBICompact_t dst;
+	dst.pEntries = dstEntries;
+	VBIC_BOOL res = VBIC_FromBuffer(&dst, 1, badBuf, sizeof(badBuf));
+	TEST_CHECK_EQUAL(VBIC_FALSE, res);
+}
+
+TEST(VBICompact, vbic_buffer_too_small)
+{
+	test_vbic_buffer_too_small();
+}
+
+void test_vbic_line18_zeroes_and_leadin_leadout()
+{
+	// Builds an entry with PATTERN_ZEROES and verifies VBIC_GetCurFieldLine18
+	// is exactly 0 after VBIC_LoadLine18 runs, pinning the three
+	// `pu8CurLine18[i] = 0` assignments in the ZEROES branch.
+	VBICompactEntry_t entries[3];
+	VBICompact_t compact;
+	compact.uEntryCount = 3;
+	compact.pEntries = entries;
+	compact.uTotalFields = 100;
+
+	entries[0].u32StartAbsField = 0;
+	entries[0].i32StartPictureNumber = 0;
+	entries[0].typePattern = PATTERN_ZEROES;
+	entries[0].u16Special = 0;
+	entries[0].u8PatternOffset = 0;
+
+	entries[1].u32StartAbsField = 10;
+	entries[1].i32StartPictureNumber = 0;
+	entries[1].typePattern = PATTERN_LEADIN;
+	entries[1].u16Special = 0;
+	entries[1].u8PatternOffset = 0;
+
+	entries[2].u32StartAbsField = 20;
+	entries[2].i32StartPictureNumber = 0;
+	entries[2].typePattern = PATTERN_LEADOUT;
+	entries[2].u16Special = 0;
+	entries[2].u8PatternOffset = 0;
+
+	VBIC_Init(&compact);
+
+	// field 0 -> ZEROES pattern -> line18 must read as 0x000000
+	VBIC_SetField(0);
+	TEST_CHECK_EQUAL(0u, VBIC_GetCurFieldLine18());
+
+	// field 10 -> LEADIN -> line18 is 0x88FFFF
+	VBIC_SetField(10);
+	TEST_CHECK_EQUAL(0x88FFFFu, VBIC_GetCurFieldLine18());
+
+	// field 20 -> LEADOUT -> line18 is 0x80EEEE
+	VBIC_SetField(20);
+	TEST_CHECK_EQUAL(0x80EEEEu, VBIC_GetCurFieldLine18());
+}
+
+TEST(VBICompact, vbic_line18_zeroes_and_leadin_leadout)
+{
+	test_vbic_line18_zeroes_and_leadin_leadout();
 }

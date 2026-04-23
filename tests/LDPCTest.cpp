@@ -1820,3 +1820,78 @@ TEST(LDPC, ldpc_video_mute)
 {
 	test_ldpc_video_mute();
 }
+
+void test_ldpc_init_exact_state()
+{
+	// Uses exact-value equality checks (== LDPC_TRUE / == LDPC_FALSE) rather than
+	// truthiness (!= 0), so cxx_assign_const mutants that replace 0/1 with 42 are
+	// caught. Getters covered:
+	//   ldpc_init return value
+	//   ldpc_get_video_muted, ldpc_set_video_muted (exact TRUE/FALSE)
+	//   ldpc_is_search_finish_pending after init and after ldpc_end_search
+	//   ldpc_skip_tracks / ldpc_skip_to_frame failure paths (must be exactly LDPC_FALSE)
+	VBICompact_t compact;
+	make_vbi4(&compact);
+
+	LDPC_BOOL bRes = ldpc_init(LDPC_DISC_NTSC, &compact);
+	TEST_CHECK_EQUAL(LDPC_TRUE, bRes);
+
+	// Initial state.
+	TEST_CHECK_EQUAL(LDPC_STOPPED, ldpc_get_status());
+	TEST_CHECK_EQUAL(LDPC_FALSE, ldpc_is_search_finish_pending());
+	TEST_CHECK_EQUAL(LDPC_FALSE, ldpc_get_video_muted());
+
+	// Video mute: exact-value checks after set.
+	ldpc_set_video_muted(LDPC_TRUE);
+	TEST_CHECK_EQUAL(LDPC_TRUE, ldpc_get_video_muted());
+	ldpc_set_video_muted(LDPC_FALSE);
+	TEST_CHECK_EQUAL(LDPC_FALSE, ldpc_get_video_muted());
+
+	// ldpc_end_search sets the pending-finished flag to exactly LDPC_TRUE.
+	ldpc_end_search();
+	TEST_CHECK_EQUAL(LDPC_TRUE, ldpc_is_search_finish_pending());
+
+	// Skip APIs must return exactly LDPC_FALSE when the disc isn't playing/paused.
+	TEST_CHECK_EQUAL(LDPC_FALSE, ldpc_skip_tracks(1));
+	TEST_CHECK_EQUAL(LDPC_FALSE, ldpc_skip_tracks(-1));
+	TEST_CHECK_EQUAL(LDPC_FALSE, ldpc_skip_to_frame(1));
+
+	// Invalid speed (denominator 0, numerator 0) must return exactly LDPC_FALSE.
+	TEST_CHECK_EQUAL(LDPC_FALSE, ldpc_change_speed(0, 1));	// 0X is illegal
+	TEST_CHECK_EQUAL(LDPC_FALSE, ldpc_change_speed(1, 0));	// divide-by-zero path
+}
+
+TEST(LDPC, ldpc_init_exact_state)
+{
+	test_ldpc_init_exact_state();
+}
+
+void test_ldpc_abs_field_and_error_status()
+{
+	VBICompact_t compact;
+	make_vbi4(&compact);
+
+	ldpc_init(LDPC_DISC_NTSC, &compact);
+
+	// After init, status is STOPPED, so ldpc_get_current_abs_field returns the
+	// "no frame" sentinel exactly (pins the VBIMiniNoFrame initializer).
+	TEST_CHECK_EQUAL((uint32_t) VBIMiniNoFrame, ldpc_get_current_abs_field());
+
+	// ldpc_set_current_abs_field must flip status to exactly LDPC_PAUSED and
+	// store the exact field value supplied.
+	ldpc_set_current_abs_field(7);
+	TEST_CHECK_EQUAL(LDPC_PAUSED, ldpc_get_status());
+	TEST_CHECK_EQUAL(7u, ldpc_get_current_abs_field());
+
+	ldpc_set_current_abs_field(3);
+	TEST_CHECK_EQUAL(3u, ldpc_get_current_abs_field());
+
+	// ldpc_set_error_status must flip status to exactly LDPC_ERROR.
+	ldpc_set_error_status();
+	TEST_CHECK_EQUAL(LDPC_ERROR, ldpc_get_status());
+}
+
+TEST(LDPC, ldpc_abs_field_and_error_status)
+{
+	test_ldpc_abs_field_and_error_status();
+}
